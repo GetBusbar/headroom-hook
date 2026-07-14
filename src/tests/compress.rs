@@ -201,10 +201,10 @@ fn describe_returns_schema_and_dashboard_envelope() {
     assert_eq!(call(br#"{"describe":false}"#, &knobs), json!({}));
 }
 
-/// A `status` query returns observed settings + the metrics array: Headroom's OWN metric names
-/// (so a Headroom dashboard repointed at busbar lights up) plus busbar-native per-pool extras
-/// (labels, estimated $ with a CI, a latency histogram). Drives a compressing request first so
-/// the counters are non-zero.
+/// A `status` query returns observed settings + the metrics array using Headroom's REAL `/metrics`
+/// names, types, and units (counters + the `headroom_overhead_ms_*` millisecond summary — no
+/// histograms, matching the running proxy) plus busbar-native per-pool extras (a `pool` label,
+/// estimated $ with a CI). Drives a compressing request first so the counters are non-zero.
 #[test]
 fn status_reports_headroom_named_metrics() {
     let knobs = locked(Knobs {
@@ -230,21 +230,25 @@ fn status_reports_headroom_named_metrics() {
         .expect("metrics array");
     let by_name = |n: &str| m.iter().find(|e| e["name"] == n).cloned();
 
-    // Headroom's OWN documented Prometheus names — the drop-in dashboard compatibility.
-    // compression_ratio is a NATIVE histogram (le buckets), not quantiles, so histogram_quantile works.
-    let ratio = by_name("headroom_compression_ratio").expect("ratio metric");
-    assert_eq!(ratio["type"], "histogram");
-    assert!(ratio["buckets"].is_object(), "must carry native le buckets");
-    assert!(ratio["buckets"]["1"].is_number() || ratio["buckets"]["1.0"].is_number());
-    assert_eq!(ratio["labels"]["pool"], "p"); // wire_line routes pool "p"
-
+    // Headroom's REAL Prometheus names/types — the drop-in dashboard compatibility.
     let saved = by_name("headroom_tokens_saved_total").expect("headroom_tokens_saved_total");
+    assert_eq!(saved["type"], "counter");
     assert!(saved["value"].as_u64().unwrap() > 0);
-    assert!(by_name("headroom_persistent_savings_tokens_saved_total").is_some());
-    let lat = by_name("headroom_latency_seconds").expect("headroom_latency_seconds");
-    assert_eq!(lat["type"], "histogram");
-    assert!(lat["buckets"].is_object());
+    assert_eq!(saved["labels"]["pool"], "p"); // wire_line routes pool "p"
+    assert!(by_name("headroom_tokens_input_total").is_some());
     assert!(by_name("headroom_requests_total").unwrap()["value"].as_u64().unwrap() >= 1);
+
+    // overhead is Headroom's real ms SUMMARY: two counters (_sum,_count) + two gauges (_min,_max).
+    assert_eq!(by_name("headroom_overhead_ms_sum").unwrap()["type"], "counter");
+    let cnt = by_name("headroom_overhead_ms_count").expect("overhead count");
+    assert_eq!(cnt["type"], "counter");
+    assert!(cnt["value"].as_u64().unwrap() >= 1);
+    assert_eq!(by_name("headroom_overhead_ms_min").unwrap()["type"], "gauge");
+    assert_eq!(by_name("headroom_overhead_ms_max").unwrap()["type"], "gauge");
+    // No histograms — the real proxy has none.
+    assert!(m.iter().all(|e| e["type"] != "histogram"), "Headroom emits no histograms");
+    assert!(by_name("headroom_compression_ratio").is_none());
+    assert!(by_name("headroom_latency_seconds").is_none());
 
     // busbar-native extra: estimated $ with a bounding CI.
     let dollars = by_name("dollars_saved").expect("dollars_saved");

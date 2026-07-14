@@ -175,8 +175,8 @@ pub fn describe_reply() -> Value {
         "schema": settings_schema(),
         "dashboard": { "widgets": [
             {"metric": "headroom_tokens_saved_total",   "label": "Tokens saved",      "viz": "counter"},
-            {"metric": "headroom_compression_ratio",    "label": "Compression ratio", "viz": "histogram"},
-            {"metric": "headroom_latency_seconds",      "label": "Compression latency", "viz": "histogram", "unit": "s"},
+            {"metric": "headroom_tokens_input_total",   "label": "Input tokens",      "viz": "counter"},
+            {"metric": "headroom_overhead_ms_sum",      "label": "Overhead (ms)",     "viz": "counter", "unit": "ms"},
             {"metric": "dollars_saved",                 "label": "Proxy $ saved",     "viz": "number", "unit": "$"},
             {"metric": "headroom_requests_total",       "label": "Requests",          "viz": "counter"}
         ]}
@@ -221,29 +221,24 @@ pub fn encode_reply(reply: &Value) -> Vec<u8> {
     out
 }
 
-/// Bounded per-pool sample reservoirs (compression ratios, latencies) so memory stays flat under a
-/// flood; a real deployment would use a t-digest, this keeps the example honest and cheap.
-const MAX_SAMPLES: usize = 4096;
-
-/// Per-pool operational tallies — the raw material for the `status` metrics array. One process serves
-/// many pools; busbar sends `request.pool` on every transform, so we key by it.
+/// Per-pool operational tallies — the raw material for the `status` metrics array. Field names and
+/// units mirror Headroom's real `/metrics` exposition so busbar re-exposes them 1:1. One process
+/// serves many pools; busbar sends `request.pool` on every transform, so we key by it.
 #[derive(Default)]
 struct PoolStat {
-    /// Transform requests SEEN on this pool (the compressed-rate denominator).
+    /// Transform requests SEEN on this pool — `headroom_requests_total`.
     requests_seen: u64,
-    /// Requests actually COMPRESSED (savings cleared `min_savings_pct`).
-    requests_compressed: u64,
-    /// Runs where compression did NOT shrink the body (compressed >= original) — Headroom's
-    /// `proxy_compression_rejected_by_token_check_total` semantics (we abstained).
-    rejected_no_shrink: u64,
-    /// Lifetime input / output chars on compressed requests.
+    /// Input chars SEEN across every transform — `headroom_tokens_input_total` (via `est_tokens`).
+    chars_seen: u64,
+    /// Lifetime input / output chars on compressed requests — the `headroom_tokens_saved_total` base.
     chars_in: u64,
     chars_out: u64,
-    /// Per-compressed-message ratio (compressed_len / original_len) — the distribution behind
-    /// Headroom's `proxy_compression_ratio_by_strategy`.
-    ratio_samples: Vec<f64>,
-    /// Per-request compression latencies (micros) — Headroom's proxy-overhead distribution.
-    latency_us: Vec<u64>,
+    /// Headroom-processing overhead per request, in whole microseconds — reduced into the
+    /// `headroom_overhead_ms_*` millisecond summary (sum / count / min / max).
+    overhead_us_sum: u128,
+    overhead_us_count: u64,
+    overhead_us_min: u64,
+    overhead_us_max: u64,
 }
 
 /// Process-wide, per-pool metrics accumulator. Behind a `Mutex` (contention is trivial — one short
@@ -329,10 +324,6 @@ pub fn handle_line(line: &[u8], knobs: &RwLock<Knobs>, metrics: &Mutex<Metrics>)
     let mut chars_before = 0usize;
     let mut chars_after = 0usize;
     let mut out: Vec<Value> = Vec::with_capacity(messages.len());
-    // Per-shrunk-block compression ratios (compressed/original) + a count of runs that did NOT
-    // shrink — the raw material for `proxy_compression_ratio_by_strategy` and its rejected counter.
-    let mut ratios: Vec<f64> = Vec::new();
-    let mut rejected: u64 = 0;
     let last = messages.len() - 1;
     for (i, m) in messages.iter().enumerate() {
         chars_before += m.text.len();
@@ -343,19 +334,12 @@ pub fn handle_line(line: &[u8], knobs: &RwLock<Knobs>, metrics: &Mutex<Metrics>)
             // panics on some input, keep that message verbatim instead of dying — a hook must
             // never crash on malformed/adversarial content. (`AssertUnwindSafe` is sound here:
             // the closure only reads `&m.text`/`&query` and the crusher is dropped either way.)
-            let compressed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 crusher
                     .compress(&m.text, &query, Some(knobs.target_ratio))
                     .compressed
             }))
-            .unwrap_or_else(|_| m.text.clone());
-            // Observe this block: shrank -> ratio sample; didn't -> a rejected-by-check run.
-            if !m.text.is_empty() && compressed.len() < m.text.len() {
-                ratios.push(compressed.len() as f64 / m.text.len() as f64);
-            } else {
-                rejected += 1;
-            }
-            compressed
+            .unwrap_or_else(|_| m.text.clone())
         };
         chars_after += text.len();
         // BODY form: {role, content} — spliced verbatim into the request's `messages`.
@@ -375,17 +359,17 @@ pub fn handle_line(line: &[u8], knobs: &RwLock<Knobs>, metrics: &Mutex<Metrics>)
         let mut m = metrics.lock().unwrap_or_else(|e| e.into_inner());
         let s = m.pools.entry(pool).or_default();
         s.requests_seen += 1;
-        s.rejected_no_shrink += rejected;
-        if s.latency_us.len() < MAX_SAMPLES {
-            s.latency_us.push(elapsed_us);
-        }
-        for r in ratios {
-            if s.ratio_samples.len() < MAX_SAMPLES {
-                s.ratio_samples.push(r);
-            }
-        }
+        s.chars_seen += chars_before as u64;
+        // Fold this request's processing time into the overhead summary (µs; rendered as ms).
+        s.overhead_us_sum += elapsed_us as u128;
+        s.overhead_us_min = if s.overhead_us_count == 0 {
+            elapsed_us
+        } else {
+            s.overhead_us_min.min(elapsed_us)
+        };
+        s.overhead_us_max = s.overhead_us_max.max(elapsed_us);
+        s.overhead_us_count += 1;
         if committed {
-            s.requests_compressed += 1;
             s.chars_in += chars_before as u64;
             s.chars_out += chars_after as u64;
         }
@@ -398,60 +382,60 @@ pub fn handle_line(line: &[u8], knobs: &RwLock<Knobs>, metrics: &Mutex<Metrics>)
     }
 }
 
-/// Build the `status` reply: OBSERVED settings + the metrics ARRAY. Metric NAMES + TYPES are
-/// Headroom's OWN documented Prometheus vocabulary (`headroom_requests_total`,
-/// `headroom_tokens_saved_total`, `headroom_persistent_savings_tokens_saved_total`, the
-/// `headroom_compression_ratio` and `headroom_latency_seconds` histograms) — so when busbar
-/// re-exposes them on its Prometheus scrape, a Grafana dashboard built for Headroom reads them off
-/// busbar with no query change. Plus one busbar-native extra (`dollars_saved`, estimated + CI). The
-/// histograms carry native `le` buckets so `histogram_quantile()` panels work. busbar bounds/
-/// sanitizes the array on receipt.
+/// Build the `status` reply: OBSERVED settings + the metrics ARRAY. Metric NAMES, TYPES, and UNITS
+/// mirror Headroom's REAL `/metrics` exposition verbatim (verified against the running proxy):
+/// `headroom_requests_total`, `headroom_tokens_input_total`, `headroom_tokens_saved_total` are
+/// counters, and `headroom_overhead_ms_{sum,count,min,max}` is the millisecond overhead summary
+/// Headroom uses (two counters + two gauges — Headroom has no native histograms). So when busbar
+/// re-exposes these on its Prometheus scrape, a Grafana dashboard built for Headroom reads them off
+/// busbar with no query change. Plus one busbar-native extra (`dollars_saved`, estimated + CI).
+/// busbar bounds/sanitizes the array on receipt.
 pub fn build_status(knobs: &RwLock<Knobs>, metrics: &Mutex<Metrics>) -> Value {
     let k = *knobs.read().unwrap_or_else(|e| e.into_inner());
     let m = metrics.lock().unwrap_or_else(|e| e.into_inner());
     let mut out: Vec<Value> = Vec::new();
     for (pool, s) in m.pools.iter() {
-        // Headroom's OWN documented Prometheus metric names + types (see the Headroom `/metrics`
-        // exposition: headroom_requests_total, headroom_tokens_saved_total, headroom_compression_ratio
-        // histogram, headroom_latency_seconds histogram). Busbar re-exposes these on its Prometheus
-        // scrape under these exact names, so a Grafana dashboard built for Headroom reads them off
-        // Busbar with no query change. (The extra `pool` label doesn't affect a name-only query.)
         let tokens_saved = est_tokens(s.chars_in.saturating_sub(s.chars_out));
         out.push(json!({
             "name": "headroom_requests_total", "type": "counter", "value": s.requests_seen,
-            "labels": {"pool": pool, "mode": "optimize"}, "label": "Requests", "viz": "counter",
-            "help": "Total requests processed"
+            "labels": {"pool": pool}, "label": "Requests", "viz": "counter",
+            "help": "Total number of requests"
+        }));
+        out.push(json!({
+            "name": "headroom_tokens_input_total", "type": "counter",
+            "value": est_tokens(s.chars_seen), "labels": {"pool": pool}, "label": "Input tokens",
+            "viz": "counter", "help": "Total input tokens"
         }));
         out.push(json!({
             "name": "headroom_tokens_saved_total", "type": "counter", "value": tokens_saved,
             "labels": {"pool": pool}, "label": "Tokens saved", "viz": "counter",
-            "help": "Total tokens saved (estimated; busbar /usage is the measured truth)"
+            "help": "Tokens saved by optimization"
         }));
-        out.push(json!({
-            "name": "headroom_persistent_savings_tokens_saved_total", "type": "counter",
-            "value": tokens_saved, "labels": {"pool": pool}, "label": "Lifetime tokens saved",
-            "viz": "counter", "help": "Durable lifetime input tokens saved by compression"
-        }));
-        // compression_ratio — a NATIVE Prometheus histogram (le buckets), so histogram_quantile works
-        // exactly as it does on Headroom's own histogram. Ratio = compressed/original per shrunk block.
-        if let Some((count, b)) =
-            buckets_f64(&s.ratio_samples, &[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
-        {
+        // headroom_overhead_ms_* — Headroom's real millisecond overhead SUMMARY (not a histogram):
+        // two counters (_sum, _count) + two gauges (_min, _max), µs folded to ms to match the unit.
+        if s.overhead_us_count > 0 {
+            let ms = |us: u128| us as f64 / 1000.0;
             out.push(json!({
-                "name": "headroom_compression_ratio", "type": "histogram", "value": count,
-                "buckets": b, "labels": {"pool": pool}, "label": "Compression ratio", "viz": "histogram",
-                "help": "Compression ratio histogram (compressed/original per shrunk block)"
+                "name": "headroom_overhead_ms_sum", "type": "counter", "value": ms(s.overhead_us_sum),
+                "labels": {"pool": pool}, "label": "Overhead (sum)", "unit": "ms", "viz": "counter",
+                "help": "Sum of Headroom processing overhead in milliseconds"
             }));
-        }
-        // latency_seconds — native histogram, samples converted µs -> seconds to match Headroom's unit.
-        let secs: Vec<f64> = s.latency_us.iter().map(|&u| u as f64 / 1_000_000.0).collect();
-        if let Some((count, b)) =
-            buckets_f64(&secs, &[0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1])
-        {
             out.push(json!({
-                "name": "headroom_latency_seconds", "type": "histogram", "value": count, "buckets": b,
-                "labels": {"pool": pool}, "label": "Compression latency", "unit": "s",
-                "viz": "histogram", "help": "Compression latency histogram (seconds)"
+                "name": "headroom_overhead_ms_count", "type": "counter", "value": s.overhead_us_count,
+                "labels": {"pool": pool}, "label": "Overhead (count)", "viz": "counter",
+                "help": "Count of observed Headroom overhead samples"
+            }));
+            out.push(json!({
+                "name": "headroom_overhead_ms_min", "type": "gauge",
+                "value": ms(s.overhead_us_min as u128), "labels": {"pool": pool},
+                "label": "Overhead (min)", "unit": "ms", "viz": "number",
+                "help": "Minimum observed Headroom overhead in milliseconds"
+            }));
+            out.push(json!({
+                "name": "headroom_overhead_ms_max", "type": "gauge",
+                "value": ms(s.overhead_us_max as u128), "labels": {"pool": pool},
+                "label": "Overhead (max)", "unit": "ms", "viz": "number",
+                "help": "Maximum observed Headroom overhead in milliseconds"
             }));
         }
         // busbar-native extra (non-conflicting name): estimated $ saved with a confidence interval.
@@ -477,21 +461,6 @@ pub fn build_status(knobs: &RwLock<Knobs>, metrics: &Mutex<Metrics>) -> Value {
         },
         "metrics": out
     }})
-}
-
-/// Cumulative Prometheus-histogram buckets for `samples` over ascending `bounds` (`le` upper bounds).
-/// Returns `(total_count, {le_string: cumulative_count})` or `None` when empty. Only the finite bounds
-/// are returned; busbar's scrape renderer appends the `+Inf` bucket (= total) to close the histogram.
-fn buckets_f64(samples: &[f64], bounds: &[f64]) -> Option<(u64, Value)> {
-    if samples.is_empty() {
-        return None;
-    }
-    let mut map = serde_json::Map::new();
-    for &b in bounds {
-        let c = samples.iter().filter(|&&x| x <= b).count();
-        map.insert(format!("{b}"), json!(c));
-    }
-    Some((samples.len() as u64, Value::Object(map)))
 }
 
 #[cfg(test)]
