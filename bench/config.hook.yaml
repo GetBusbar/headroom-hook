@@ -1,0 +1,41 @@
+# Copyright (C) 2026 Busbar Inc and contributors
+#
+# Hooked busbar config for the A/B: identical to config.baseline.yaml plus the headroom gate,
+# registered exactly as the README recommends (global rewrite gate, prompt: rw, 25ms deadline,
+# fail-open on error). The rig starts the hook binary on /tmp/headroom-bench.sock first.
+listen: "127.0.0.1:8080"
+
+auth:
+  chain: [tokens]
+  client_tokens:
+    - "bench-token"
+
+providers:
+  mock:
+    api_key_env: BENCH_MOCK_KEY
+
+models:
+  bench-model:
+    provider: mock
+    max_concurrent: 256
+    max_requests: -1
+
+pools:
+  bench-pool:
+    members:
+      - target: bench-model
+
+hooks:
+  headroom:
+    kind: gate
+    socket: /tmp/headroom-bench.sock
+    prompt: rw
+    global: true
+    timeout_ms: 25
+    on_error: nothing
+    settings:
+      target_ratio: 0.5
+      min_savings_pct: 10
+
+observability:
+  emit_server_timing: true   # expose busbar;dur so the bench reads busbar's own-clock cost

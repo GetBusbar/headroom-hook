@@ -1,0 +1,71 @@
+{
+  "bench": "busbar_ab",
+  "uname": "Darwin Matthews-MacBook-Pro.local 25.5.0 Darwin Kernel Version 25.5.0: Tue Jun  9 22:28:34 PDT 2026; root:xnu-12377.121.10~1/RELEASE_ARM64_T6050 arm64",
+  "busbar_bin": "/Users/matthew/Developer/busbarAI/busbarAI/target/release/busbar",
+  "requests": 200,
+  "concurrency": 1,
+  "history_kb": 11,
+  "upstream_delay_ms": 200,
+  "phases": {
+    "baseline": {
+      "anthropic_to_openai": {
+        "requests_ok": 200,
+        "errors": 0,
+        "p50_ms": 205.773,
+        "p90_ms": 206.259,
+        "p99_ms": 206.746,
+        "mean_ms": 204.992,
+        "upstream_prompt_tokens_est_total": 566400,
+        "upstream_prompt_tokens_est_per_req": 2832.0
+      },
+      "openai_to_openai": {
+        "requests_ok": 200,
+        "errors": 0,
+        "p50_ms": 205.638,
+        "p90_ms": 206.076,
+        "p99_ms": 206.504,
+        "mean_ms": 204.683,
+        "upstream_prompt_tokens_est_total": 566400,
+        "upstream_prompt_tokens_est_per_req": 2832.0
+      }
+    },
+    "hook": {
+      "anthropic_to_openai": {
+        "requests_ok": 200,
+        "errors": 0,
+        "p50_ms": 206.49,
+        "p90_ms": 207.281,
+        "p99_ms": 207.925,
+        "mean_ms": 205.831,
+        "upstream_prompt_tokens_est_total": 284400,
+        "upstream_prompt_tokens_est_per_req": 1422.0
+      },
+      "openai_to_openai": {
+        "requests_ok": 200,
+        "errors": 0,
+        "p50_ms": 206.14,
+        "p90_ms": 206.795,
+        "p99_ms": 207.177,
+        "mean_ms": 205.573,
+        "upstream_prompt_tokens_est_total": 284400,
+        "upstream_prompt_tokens_est_per_req": 1422.0
+      }
+    }
+  },
+  "delta": {
+    "anthropic_to_openai": {
+      "added_p50_ms": 0.717,
+      "added_p99_ms": 1.179,
+      "tokens_per_req_baseline": 2832.0,
+      "tokens_per_req_hook": 1422.0,
+      "tokens_saved_pct": 49.8
+    },
+    "openai_to_openai": {
+      "added_p50_ms": 0.502,
+      "added_p99_ms": 0.673,
+      "tokens_per_req_baseline": 2832.0,
+      "tokens_per_req_hook": 1422.0,
+      "tokens_saved_pct": 49.8
+    }
+  }
+}

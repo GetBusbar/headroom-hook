@@ -1,0 +1,28 @@
+# Copyright (C) 2026 Busbar Inc and contributors
+#
+# Baseline busbar config for the A/B: NO hook. One model, one single-member pool, token auth,
+# governance off — the same shape as the engine's own latency bench config.
+listen: "127.0.0.1:8080"
+
+auth:
+  chain: [tokens]
+  client_tokens:
+    - "bench-token"
+
+providers:
+  mock:
+    api_key_env: BENCH_MOCK_KEY
+
+models:
+  bench-model:
+    provider: mock
+    max_concurrent: 256
+    max_requests: -1
+
+pools:
+  bench-pool:
+    members:
+      - target: bench-model
+
+observability:
+  emit_server_timing: true   # expose busbar;dur so the bench reads busbar's own-clock cost

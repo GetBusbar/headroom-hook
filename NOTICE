@@ -1,0 +1,10 @@
+headroom-hook
+Copyright (C) 2026 Busbar Inc and contributors
+
+This product includes software developed as part of the Busbar project
+(https://getbusbar.com).
+
+It links headroom-core (https://github.com/headroomlabs-ai/headroom), the
+compression core of the Headroom project, under its own license. Full credit
+for the compression work goes to the Headroom project; this hook adapts it to
+the Busbar hook wire.

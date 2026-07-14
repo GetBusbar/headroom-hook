@@ -1,0 +1,90 @@
+{
+  "bench": "hook_direct",
+  "uname": "Darwin Matthews-MacBook-Pro.local 25.5.0 Darwin Kernel Version 25.5.0: Tue Jun  9 22:28:34 PDT 2026; root:xnu-12377.121.10~1/RELEASE_ARM64_T6050 arm64",
+  "hook_binary": "/Users/matthew/Developer/busbarAI/Hooks/Headroom/target/release/headroom-hook",
+  "settings": {
+    "target_ratio": 0.5,
+    "min_savings_pct": 10
+  },
+  "latency_by_history_size": [
+    {
+      "history_kb": 2,
+      "wire_line_bytes": 2464,
+      "iters": 300,
+      "p50_us": 147.5,
+      "p90_us": 191.2,
+      "p99_us": 209.4,
+      "mean_us": 155.6
+    },
+    {
+      "history_kb": 8,
+      "wire_line_bytes": 8718,
+      "iters": 300,
+      "p50_us": 379.3,
+      "p90_us": 404.0,
+      "p99_us": 435.6,
+      "mean_us": 382.2
+    },
+    {
+      "history_kb": 16,
+      "wire_line_bytes": 17131,
+      "iters": 300,
+      "p50_us": 723.1,
+      "p90_us": 752.2,
+      "p99_us": 782.8,
+      "mean_us": 725.1
+    },
+    {
+      "history_kb": 64,
+      "wire_line_bytes": 67063,
+      "iters": 300,
+      "p50_us": 2890.4,
+      "p90_us": 3031.2,
+      "p99_us": 3123.6,
+      "mean_us": 2900.3
+    }
+  ],
+  "token_savings_by_content": [
+    {
+      "case": "tool_log_11kb",
+      "tokens_before_est": 2833,
+      "tokens_after_est": 1423,
+      "saved_pct": 49.8,
+      "abstained": false
+    },
+    {
+      "case": "tool_log_64kb",
+      "tokens_before_est": 16419,
+      "tokens_after_est": 8235,
+      "saved_pct": 49.8,
+      "abstained": false
+    },
+    {
+      "case": "rag_dump_5kb",
+      "tokens_before_est": 1335,
+      "tokens_after_est": 721,
+      "saved_pct": 46.0,
+      "abstained": false
+    },
+    {
+      "case": "rag_dump_16kb",
+      "tokens_before_est": 4211,
+      "tokens_after_est": 2127,
+      "saved_pct": 49.5,
+      "abstained": false
+    },
+    {
+      "case": "short_chat",
+      "tokens_before_est": 22,
+      "tokens_after_est": 22,
+      "saved_pct": 0.0,
+      "abstained": true
+    }
+  ],
+  "abstain": {
+    "short_chats": 100,
+    "short_chat_abstain_pct": 100.0,
+    "compressible_histories": 100,
+    "compressible_abstain_pct": 0.0
+  }
+}

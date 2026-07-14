@@ -1,0 +1,129 @@
+{
+  "bench": "busbar_ab",
+  "uname": "Darwin Matthews-MacBook-Pro.local 25.5.0 Darwin Kernel Version 25.5.0: Tue Jun  9 22:28:34 PDT 2026; root:xnu-12377.121.10~1/RELEASE_ARM64_T6050 arm64",
+  "busbar_bin": "/Users/matthew/Developer/busbarAI/busbarAI/target/release/busbar",
+  "requests": 1000,
+  "concurrency": 1,
+  "history_kb": 11,
+  "upstream_delay_ms": 0,
+  "phases": {
+    "baseline": {
+      "anthropic_to_openai": {
+        "requests_ok": 1000,
+        "errors": 0,
+        "busbar_dur_us": {
+          "p50": 34,
+          "p90": 36,
+          "p99": 41,
+          "n": 1000
+        },
+        "wall_ms": {
+          "p50": 0.173,
+          "p90": 0.189,
+          "p99": 0.207
+        },
+        "upstream_prompt_tokens_est_total": 2832000,
+        "upstream_prompt_tokens_est_per_req": 2832.0
+      },
+      "openai_to_openai": {
+        "requests_ok": 1000,
+        "errors": 0,
+        "busbar_dur_us": {
+          "p50": 22,
+          "p90": 25,
+          "p99": 30,
+          "n": 1000
+        },
+        "wall_ms": {
+          "p50": 0.161,
+          "p90": 0.173,
+          "p99": 0.194
+        },
+        "upstream_prompt_tokens_est_total": 2832000,
+        "upstream_prompt_tokens_est_per_req": 2832.0
+      }
+    },
+    "hook": {
+      "anthropic_to_openai": {
+        "requests_ok": 1000,
+        "errors": 0,
+        "busbar_dur_us": {
+          "p50": 584,
+          "p90": 612,
+          "p99": 648,
+          "n": 1000
+        },
+        "wall_ms": {
+          "p50": 0.81,
+          "p90": 0.843,
+          "p99": 0.89
+        },
+        "upstream_prompt_tokens_est_total": 1422000,
+        "upstream_prompt_tokens_est_per_req": 1422.0
+      },
+      "openai_to_openai": {
+        "requests_ok": 1000,
+        "errors": 0,
+        "busbar_dur_us": {
+          "p50": 569,
+          "p90": 601,
+          "p99": 634,
+          "n": 1000
+        },
+        "wall_ms": {
+          "p50": 0.77,
+          "p90": 0.806,
+          "p99": 0.844
+        },
+        "upstream_prompt_tokens_est_total": 1422000,
+        "upstream_prompt_tokens_est_per_req": 1422.0
+      }
+    }
+  },
+  "delta": {
+    "anthropic_to_openai": {
+      "busbar_dur_us": {
+        "base": {
+          "p50": 34,
+          "p90": 36,
+          "p99": 41
+        },
+        "with_hook": {
+          "p50": 584,
+          "p90": 612,
+          "p99": 648
+        },
+        "hook_added": {
+          "p50": 550,
+          "p90": 576,
+          "p99": 607
+        }
+      },
+      "tokens_per_req_baseline": 2832.0,
+      "tokens_per_req_hook": 1422.0,
+      "tokens_saved_pct": 49.8
+    },
+    "openai_to_openai": {
+      "busbar_dur_us": {
+        "base": {
+          "p50": 22,
+          "p90": 25,
+          "p99": 30
+        },
+        "with_hook": {
+          "p50": 569,
+          "p90": 601,
+          "p99": 634
+        },
+        "hook_added": {
+          "p50": 547,
+          "p90": 576,
+          "p99": 604
+        }
+      },
+      "tokens_per_req_baseline": 2832.0,
+      "tokens_per_req_hook": 1422.0,
+      "tokens_saved_pct": 49.8
+    }
+  }
+}

@@ -1,0 +1,9 @@
+# Copyright (C) 2026 Busbar Inc and contributors
+#
+# Provider catalog for the headroom-hook A/B benchmark: one provider, the local recording mock
+# (mock_upstream.py). Busbar 1.3.0's upstream guard permits plaintext http to a loopback host
+# (the local-model carve-out), so this works against the release binary.
+mock:
+  protocol: openai
+  base_url: http://127.0.0.1:9001
+  error_map: {}
