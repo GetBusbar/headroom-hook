@@ -1,0 +1,30 @@
+# Minimal busbar config for the `docker compose up` demo. Registers the Headroom
+# compression hook on every request + one pool over Anthropic. The busbar image
+# ships the vetted provider catalog, so you only name the provider and give it a
+# key via the environment (see docker-compose.yml). Swap the provider/model for
+# whatever you use — busbar speaks all six protocols.
+listen: "0.0.0.0:8080"
+
+hooks:
+  headroom:
+    kind: gate
+    socket: /run/busbar/headroom.sock   # the shared-volume path in docker-compose.yml
+    prompt: rw            # the rewrite grant
+    global: true          # compress every request
+    on_error: nothing     # a broken compressor never touches a request
+
+providers:
+  anthropic:
+    api_key_env: ANTHROPIC_KEY
+
+models:
+  claude:
+    provider: anthropic
+    max_concurrent: 10
+    upstream_model: claude-3-5-sonnet-20241022
+
+pools:
+  default:
+    members:
+      - target: claude
+        weight: 1

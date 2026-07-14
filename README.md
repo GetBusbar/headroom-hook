@@ -83,16 +83,19 @@ reconnects across restarts, so start order doesn't matter.
 
 ### Docker (recommended): `docker compose up`
 
-Two tiny images, one shared socket. Drop this repo's [`docker-compose.yml`](docker-compose.yml)
-next to your busbar `config.yaml` (with the hook registered — see the compose
-file's header) and:
+Two tiny images, one shared socket — copy, paste, running:
 
 ```sh
+curl -fsSL -O https://raw.githubusercontent.com/GetBusbar/headroom-hook/main/docker-compose.yml
+curl -fsSL -o config.yaml https://raw.githubusercontent.com/GetBusbar/headroom-hook/main/config.example.yaml
+export ANTHROPIC_KEY=sk-ant-...   # or edit config.yaml for your provider
 docker compose up
 ```
 
-busbar and the compression hook come up together and Headroom is on every
-request. The images are `getbusbar/headroom-hook` and `getbusbar/busbar`.
+busbar (`:8080`) and the compression hook come up together and Headroom is on
+every request. The [starter config](config.example.yaml) registers the hook
+globally over one Anthropic pool — edit it for your own pools/providers. The
+images are `getbusbar/headroom-hook` and `getbusbar/busbar`.
 
 ### Prebuilt binary
 

@@ -6,19 +6,16 @@
 # socket; busbar connects to it. You own both lifecycles — busbar lazy-connects
 # and reconnects across restarts, so start order doesn't matter.
 #
-# What you provide: a busbar `config.yaml` next to this file (your providers,
-# models, and pools — see getbusbar.com/docs) with the hook registered:
+# Copy-paste to run it (grabs this file + a starter busbar config):
 #
-#     hooks:
-#       headroom:
-#         kind: gate
-#         socket: /run/busbar/headroom.sock   # the shared-volume path below
-#         prompt: rw          # the rewrite grant
-#         global: true        # attach to every request
-#         on_error: nothing   # a broken compressor never touches a request
+#     curl -fsSL -O https://raw.githubusercontent.com/GetBusbar/headroom-hook/main/docker-compose.yml
+#     curl -fsSL -o config.yaml https://raw.githubusercontent.com/GetBusbar/headroom-hook/main/config.example.yaml
+#     export ANTHROPIC_KEY=sk-ant-...    # or edit config.yaml for your provider
+#     docker compose up
 #
-# That's the whole integration. Compression is now on every request across all
-# six protocols busbar speaks.
+# busbar (:8080) + the compression hook come up together; the starter config
+# registers Headroom globally, so every request across all six protocols busbar
+# speaks is compressed. Edit config.yaml to point at your own pools/providers.
 
 services:
   headroom:
@@ -37,9 +34,11 @@ services:
     volumes:
       - sock:/run/busbar          # busbar sees the same socket file
       - ./config.yaml:/etc/busbar/config.yaml:ro
-    # Pass provider credentials however you prefer, e.g.:
-    # environment:
-    #   - ANTHROPIC_KEY
+    environment:
+      # The starter config.yaml routes to Anthropic — export your key before
+      # `docker compose up` (or swap the provider in config.yaml). busbar reads
+      # the key from this env var; it never leaves your host.
+      - ANTHROPIC_KEY
 
 volumes:
   sock: {}                        # a small shared volume, just for the socket
