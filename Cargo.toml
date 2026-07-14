@@ -1,16 +1,18 @@
 [package]
 name = "headroom-hook"
-version = "1.0.1"
+version = "1.0.2"
 edition = "2024"
 publish = false
 description = "busbar rewrite gate: compresses LLM chat history with headroom-core (BM25 TextCrusher) over busbar's Unix-socket hook wire"
 license = "Apache-2.0"
 
 [dependencies]
-# Pinned to the rev evaluated in ../NOTES.md — headroom-core is 0.1.0, unpublished, and
-# mid-rewrite (Python -> Rust port), so the API can churn under us. The pin protects builds;
-# bumps are manual and re-run the full test suite.
-headroom-core = { git = "https://github.com/headroomlabs-ai/headroom", rev = "c41cf444c74a9d190ab5922836122d0d10bc988c" }
+# headroom-core with `default-features = false` — the lexical (BM25 TextCrusher) build, with the
+# ONNX stack (ort/fastembed/magika) feature-gated OUT. This hook only needs TextCrusher, so the
+# lexical build is ~7x smaller (29MB -> ~3MB) and avoids the ONNX-in-distroless slow path. Pinned
+# to the `ml`-feature-gate PR commit on the fork; re-pin to the upstream commit once it merges
+# (headroomlabs-ai/headroom#2165). The pin protects builds; bumps are manual + re-run the suite.
+headroom-core = { git = "https://github.com/MattJackson/headroom", rev = "304ec4244ff448ef71cd21d654342304c1afa6b2", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "signal", "time"] }

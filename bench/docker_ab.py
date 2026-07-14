@@ -40,8 +40,13 @@ HOOK_IMAGE = os.environ.get("HOOK_IMAGE", "getbusbar/headroom-hook:latest")
 MOCK = "hb-mock"
 BUSBAR = "hb-busbar"
 HOOK = "hb-hook"
+# INTERNAL ports (inside the shared netns — fixed, never collide): busbar listens on
+# 8080 (see config*.yaml), the mock on 9001 (providers.mock.yaml points busbar there).
 PORT = 8080
 MOCK_PORT = 9001
+# The only HOST-published port; override on a busy host with BENCH_PORT. The driver
+# and healthz poll this; the mock's /stats,/reset are reached in-container via docker exec.
+HOST_PORT = int(os.environ.get("BENCH_PORT", "8080"))
 
 
 def sh(*args, check=True, quiet=True):
@@ -78,7 +83,7 @@ def wait_ready(timeout=25.0):
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
-            with urllib.request.urlopen(f"http://localhost:{PORT}/healthz", timeout=1) as r:
+            with urllib.request.urlopen(f"http://localhost:{HOST_PORT}/healthz", timeout=1) as r:
                 if r.status == 200:
                     return True
         except Exception:
@@ -114,7 +119,7 @@ def load(body, n, conc, warmup):
 
     def run(count):
         durs = []
-        conn = http.client.HTTPConnection("localhost", PORT, timeout=30)
+        conn = http.client.HTTPConnection("localhost", HOST_PORT, timeout=30)
         for _ in range(count):
             conn.request("POST", "/v1/chat/completions", body=body, headers=hdrs)
             r = conn.getresponse()
@@ -149,8 +154,10 @@ def load(body, n, conc, warmup):
 
 def start_mock(delay_ms):
     rm(MOCK)
-    sh("docker", "run", "-d", "--name", MOCK, "-p", f"{PORT}:{PORT}", "-p",
-       f"{MOCK_PORT}:{MOCK_PORT}", "-v", f"{HERE}/mock_upstream.py:/mock.py:ro",
+    # Publish only busbar's data port (busbar shares this netns and listens on PORT
+    # internally). The mock's own port stays internal — reached via docker exec.
+    sh("docker", "run", "-d", "--name", MOCK, "-p", f"{HOST_PORT}:{PORT}",
+       "-v", f"{HERE}/mock_upstream.py:/mock.py:ro",
        "python:3.12-slim", "python", "/mock.py", "--port", str(MOCK_PORT),
        "--delay-ms", str(delay_ms))
     time.sleep(2)
