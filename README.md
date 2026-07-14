@@ -78,7 +78,7 @@ Reproduce every number: see [`bench/README.md`](bench/README.md).
 ## Install and run
 
 The hook is a small binary you run alongside busbar; busbar connects to it over
-a Unix socket. You own its lifecycle — busbar never spawns it, lazy-connects, and
+a Unix socket. You own its lifecycle — busbar never spawns it; it lazy-connects and
 reconnects across restarts, so start order doesn't matter.
 
 ### Docker (recommended): `docker compose up`
