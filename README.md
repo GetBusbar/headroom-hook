@@ -113,7 +113,7 @@ cargo build --release --manifest-path Headroom/Cargo.toml
 **2. Run it** on a socket:
 
 ```sh
-HEADROOM_SOCKET=/run/busbar/headroom.sock ./headroom-hook
+HEADROOM_SOCKET=/tmp/headroom.sock ./headroom-hook
 ```
 
 `HEADROOM_TARGET_RATIO` (default 0.5, the fraction of tokens to keep) and

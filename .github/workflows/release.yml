@@ -79,7 +79,7 @@ jobs:
             curl -fsSL -o headroom-hook \
               https://github.com/GetBusbar/headroom-hook/releases/download/${{ github.ref_name }}/headroom-hook-linux-x86_64
             chmod +x headroom-hook
-            HEADROOM_SOCKET=/run/busbar/headroom.sock ./headroom-hook
+            HEADROOM_SOCKET=/tmp/headroom.sock ./headroom-hook
             ```
 
             Verify with `sha256sum -c SHA256SUMS`. Assets:
