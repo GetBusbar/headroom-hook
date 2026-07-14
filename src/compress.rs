@@ -174,11 +174,11 @@ pub fn describe_reply() -> Value {
     json!({
         "schema": settings_schema(),
         "dashboard": { "widgets": [
-            {"metric": "proxy_compression_ratio_by_strategy", "label": "Compression ratio", "viz": "histogram", "unit": "ratio"},
-            {"metric": "tokens_saved_total",                  "label": "Tokens saved",      "viz": "counter"},
-            {"metric": "dollars_saved",                       "label": "Proxy $ saved",     "viz": "number", "unit": "$"},
-            {"metric": "compress_latency_us",                 "label": "Proxy overhead",    "viz": "histogram", "unit": "us"},
-            {"metric": "requests_compressed_total",           "label": "Requests compressed", "viz": "counter"}
+            {"metric": "headroom_tokens_saved_total",   "label": "Tokens saved",      "viz": "counter"},
+            {"metric": "headroom_compression_ratio",    "label": "Compression ratio", "viz": "histogram"},
+            {"metric": "headroom_latency_seconds",      "label": "Compression latency", "viz": "histogram", "unit": "s"},
+            {"metric": "dollars_saved",                 "label": "Proxy $ saved",     "viz": "number", "unit": "$"},
+            {"metric": "headroom_requests_total",       "label": "Requests",          "viz": "counter"}
         ]}
     })
 }
@@ -398,68 +398,69 @@ pub fn handle_line(line: &[u8], knobs: &RwLock<Knobs>, metrics: &Mutex<Metrics>)
     }
 }
 
-/// Build the `status` reply: OBSERVED settings + the metrics ARRAY. Metric NAMES use Headroom's own
-/// vocabulary where they map (`proxy_compression_ratio_by_strategy`,
-/// `proxy_compression_rejected_by_token_check_total`, `proxy_passthrough_bytes_modified_total`) — so
-/// a Headroom dashboard repointed at busbar's `/metrics/hooks` lights up — plus busbar-native per-pool
-/// extras (`tokens_saved_total`, `dollars_saved`, `compress_latency_us`, `requests*_total`). Every
-/// entry carries display hints; busbar bounds/sanitizes the array on receipt.
+/// Build the `status` reply: OBSERVED settings + the metrics ARRAY. Metric NAMES + TYPES are
+/// Headroom's OWN documented Prometheus vocabulary (`headroom_requests_total`,
+/// `headroom_tokens_saved_total`, `headroom_persistent_savings_tokens_saved_total`, the
+/// `headroom_compression_ratio` and `headroom_latency_seconds` histograms) — so when busbar
+/// re-exposes them on its Prometheus scrape, a Grafana dashboard built for Headroom reads them off
+/// busbar with no query change. Plus one busbar-native extra (`dollars_saved`, estimated + CI). The
+/// histograms carry native `le` buckets so `histogram_quantile()` panels work. busbar bounds/
+/// sanitizes the array on receipt.
 pub fn build_status(knobs: &RwLock<Knobs>, metrics: &Mutex<Metrics>) -> Value {
     let k = *knobs.read().unwrap_or_else(|e| e.into_inner());
     let m = metrics.lock().unwrap_or_else(|e| e.into_inner());
     let mut out: Vec<Value> = Vec::new();
     for (pool, s) in m.pools.iter() {
-        // ── Headroom-compatible metric names (their dashboard queries these) ──
-        if let Some((count, q)) = f64_quantiles(&s.ratio_samples) {
-            out.push(json!({
-                "name": "proxy_compression_ratio_by_strategy", "type": "histogram", "value": count,
-                "quantiles": q,
-                "labels": {"strategy": "text_crusher", "content_type": "chat", "pool": pool},
-                "label": "Compression ratio", "viz": "histogram", "unit": "ratio",
-                "help": "compressed_tokens/original_tokens per shrunk block (headroom-core TextCrusher)"
-            }));
-        }
-        out.push(json!({
-            "name": "proxy_compression_rejected_by_token_check_total", "type": "counter",
-            "value": s.rejected_no_shrink, "labels": {"pool": pool},
-            "label": "Rejected (no shrink)", "viz": "counter",
-            "help": "compressor runs whose output did not shrink the block (kept the original)"
-        }));
-        out.push(json!({
-            "name": "proxy_passthrough_bytes_modified_total", "type": "counter", "value": 0,
-            "labels": {"pool": pool}, "label": "Passthrough bytes modified", "viz": "counter",
-            "help": "bytes modified on the verbatim-passthrough path; must stay 0 (safety)"
-        }));
-        // ── busbar-native extras (per-pool, our own accounting) ──
+        // Headroom's OWN documented Prometheus metric names + types (see the Headroom `/metrics`
+        // exposition: headroom_requests_total, headroom_tokens_saved_total, headroom_compression_ratio
+        // histogram, headroom_latency_seconds histogram). Busbar re-exposes these on its Prometheus
+        // scrape under these exact names, so a Grafana dashboard built for Headroom reads them off
+        // Busbar with no query change. (The extra `pool` label doesn't affect a name-only query.)
         let tokens_saved = est_tokens(s.chars_in.saturating_sub(s.chars_out));
         out.push(json!({
-            "name": "tokens_saved_total", "type": "counter", "value": tokens_saved,
-            "labels": {"pool": pool}, "label": "Tokens saved", "viz": "counter",
-            "help": "estimated input tokens saved (chars/4); busbar /usage is the measured truth"
+            "name": "headroom_requests_total", "type": "counter", "value": s.requests_seen,
+            "labels": {"pool": pool, "mode": "optimize"}, "label": "Requests", "viz": "counter",
+            "help": "Total requests processed"
         }));
+        out.push(json!({
+            "name": "headroom_tokens_saved_total", "type": "counter", "value": tokens_saved,
+            "labels": {"pool": pool}, "label": "Tokens saved", "viz": "counter",
+            "help": "Total tokens saved (estimated; busbar /usage is the measured truth)"
+        }));
+        out.push(json!({
+            "name": "headroom_persistent_savings_tokens_saved_total", "type": "counter",
+            "value": tokens_saved, "labels": {"pool": pool}, "label": "Lifetime tokens saved",
+            "viz": "counter", "help": "Durable lifetime input tokens saved by compression"
+        }));
+        // compression_ratio — a NATIVE Prometheus histogram (le buckets), so histogram_quantile works
+        // exactly as it does on Headroom's own histogram. Ratio = compressed/original per shrunk block.
+        if let Some((count, b)) =
+            buckets_f64(&s.ratio_samples, &[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
+        {
+            out.push(json!({
+                "name": "headroom_compression_ratio", "type": "histogram", "value": count,
+                "buckets": b, "labels": {"pool": pool}, "label": "Compression ratio", "viz": "histogram",
+                "help": "Compression ratio histogram (compressed/original per shrunk block)"
+            }));
+        }
+        // latency_seconds — native histogram, samples converted µs -> seconds to match Headroom's unit.
+        let secs: Vec<f64> = s.latency_us.iter().map(|&u| u as f64 / 1_000_000.0).collect();
+        if let Some((count, b)) =
+            buckets_f64(&secs, &[0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1])
+        {
+            out.push(json!({
+                "name": "headroom_latency_seconds", "type": "histogram", "value": count, "buckets": b,
+                "labels": {"pool": pool}, "label": "Compression latency", "unit": "s",
+                "viz": "histogram", "help": "Compression latency histogram (seconds)"
+            }));
+        }
+        // busbar-native extra (non-conflicting name): estimated $ saved with a confidence interval.
         let dollars = tokens_saved as f64 * k.price_udollars_per_ktok / 1000.0 / 1_000_000.0;
         out.push(json!({
             "name": "dollars_saved", "type": "gauge", "value": dollars,
             "labels": {"pool": pool}, "label": "Proxy $ saved", "unit": "$", "viz": "number",
             "estimated": true, "ci_low": dollars * 0.85, "ci_high": dollars * 1.15,
             "help": "estimated input cost saved, priced from price_udollars_per_ktok (±15% CI)"
-        }));
-        if let Some((count, q)) = u64_quantiles(&s.latency_us) {
-            out.push(json!({
-                "name": "compress_latency_us", "type": "histogram", "value": count, "quantiles": q,
-                "labels": {"pool": pool}, "label": "Proxy overhead", "unit": "us", "viz": "histogram",
-                "help": "per-request compression latency distribution (microseconds)"
-            }));
-        }
-        out.push(json!({
-            "name": "requests_total", "type": "counter", "value": s.requests_seen,
-            "labels": {"pool": pool}, "label": "Requests", "viz": "counter",
-            "help": "transform requests observed on the compression path"
-        }));
-        out.push(json!({
-            "name": "requests_compressed_total", "type": "counter", "value": s.requests_compressed,
-            "labels": {"pool": pool}, "label": "Requests compressed", "viz": "counter",
-            "help": "requests whose savings cleared min_savings_pct"
         }));
     }
     let sv = if k.settings_version > 0 {
@@ -478,33 +479,19 @@ pub fn build_status(knobs: &RwLock<Knobs>, metrics: &Mutex<Metrics>) -> Value {
     }})
 }
 
-/// p50/p90/p99 over an f64 sample set → `(count, {"0.5":.., "0.9":.., "0.99":..})`, or `None` when
-/// empty. Quantile keys are probability strings in `[0,1]` — what busbar's parser accepts.
-fn f64_quantiles(samples: &[f64]) -> Option<(u64, Value)> {
+/// Cumulative Prometheus-histogram buckets for `samples` over ascending `bounds` (`le` upper bounds).
+/// Returns `(total_count, {le_string: cumulative_count})` or `None` when empty. Only the finite bounds
+/// are returned; busbar's scrape renderer appends the `+Inf` bucket (= total) to close the histogram.
+fn buckets_f64(samples: &[f64], bounds: &[f64]) -> Option<(u64, Value)> {
     if samples.is_empty() {
         return None;
     }
-    let mut s = samples.to_vec();
-    s.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let at = |p: f64| s[((p * (s.len() as f64 - 1.0)).round() as usize).min(s.len() - 1)];
-    Some((
-        samples.len() as u64,
-        json!({"0.5": at(0.5), "0.9": at(0.9), "0.99": at(0.99)}),
-    ))
-}
-
-/// p50/p90/p99 over a u64 sample set (latencies).
-fn u64_quantiles(samples: &[u64]) -> Option<(u64, Value)> {
-    if samples.is_empty() {
-        return None;
+    let mut map = serde_json::Map::new();
+    for &b in bounds {
+        let c = samples.iter().filter(|&&x| x <= b).count();
+        map.insert(format!("{b}"), json!(c));
     }
-    let mut s = samples.to_vec();
-    s.sort_unstable();
-    let at = |p: f64| s[((p * (s.len() as f64 - 1.0)).round() as usize).min(s.len() - 1)];
-    Some((
-        samples.len() as u64,
-        json!({"0.5": at(0.5), "0.9": at(0.9), "0.99": at(0.99)}),
-    ))
+    Some((samples.len() as u64, Value::Object(map)))
 }
 
 #[cfg(test)]

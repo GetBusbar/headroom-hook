@@ -197,7 +197,7 @@ fn describe_returns_schema_and_dashboard_envelope() {
     assert!(reply["schema"]["properties"]["price_udollars_per_ktok"].is_object());
     // the dashboard widget layout is declared alongside the schema (one declaration drives both).
     let widgets = reply["dashboard"]["widgets"].as_array().expect("widgets");
-    assert!(widgets.iter().any(|w| w["metric"] == "tokens_saved_total"));
+    assert!(widgets.iter().any(|w| w["metric"] == "headroom_tokens_saved_total"));
     assert_eq!(call(br#"{"describe":false}"#, &knobs), json!({}));
 }
 
@@ -230,18 +230,23 @@ fn status_reports_headroom_named_metrics() {
         .expect("metrics array");
     let by_name = |n: &str| m.iter().find(|e| e["name"] == n).cloned();
 
-    // Headroom's own metric names — the drop-in dashboard compatibility.
-    let ratio = by_name("proxy_compression_ratio_by_strategy").expect("ratio metric");
+    // Headroom's OWN documented Prometheus names — the drop-in dashboard compatibility.
+    // compression_ratio is a NATIVE histogram (le buckets), not quantiles, so histogram_quantile works.
+    let ratio = by_name("headroom_compression_ratio").expect("ratio metric");
     assert_eq!(ratio["type"], "histogram");
-    assert!(ratio["quantiles"]["0.5"].is_number());
-    assert_eq!(ratio["labels"]["strategy"], "text_crusher");
-    assert!(by_name("proxy_compression_rejected_by_token_check_total").is_some());
-    assert!(by_name("proxy_passthrough_bytes_modified_total").is_some());
+    assert!(ratio["buckets"].is_object(), "must carry native le buckets");
+    assert!(ratio["buckets"]["1"].is_number() || ratio["buckets"]["1.0"].is_number());
+    assert_eq!(ratio["labels"]["pool"], "p"); // wire_line routes pool "p"
 
-    // busbar-native extras: per-pool label, counters, estimated $ with a CI, latency histogram.
-    let saved = by_name("tokens_saved_total").expect("tokens_saved_total");
-    assert_eq!(saved["labels"]["pool"], "p"); // wire_line routes pool "p"
+    let saved = by_name("headroom_tokens_saved_total").expect("headroom_tokens_saved_total");
     assert!(saved["value"].as_u64().unwrap() > 0);
+    assert!(by_name("headroom_persistent_savings_tokens_saved_total").is_some());
+    let lat = by_name("headroom_latency_seconds").expect("headroom_latency_seconds");
+    assert_eq!(lat["type"], "histogram");
+    assert!(lat["buckets"].is_object());
+    assert!(by_name("headroom_requests_total").unwrap()["value"].as_u64().unwrap() >= 1);
+
+    // busbar-native extra: estimated $ with a bounding CI.
     let dollars = by_name("dollars_saved").expect("dollars_saved");
     assert_eq!(dollars["estimated"], true);
     let (lo, val, hi) = (
@@ -250,13 +255,6 @@ fn status_reports_headroom_named_metrics() {
         dollars["ci_high"].as_f64().unwrap(),
     );
     assert!(lo <= val && val <= hi, "CI must bound the value");
-    assert_eq!(by_name("compress_latency_us").unwrap()["type"], "histogram");
-    assert!(
-        by_name("requests_compressed_total").unwrap()["value"]
-            .as_u64()
-            .unwrap()
-            >= 1
-    );
 }
 
 /// A hook that has served nothing still answers `status` cleanly: observed settings + an empty
