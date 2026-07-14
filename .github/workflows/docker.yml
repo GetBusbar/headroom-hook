@@ -1,5 +1,5 @@
-# Build the headroom-hook image for amd64 + arm64 and publish to Docker Hub +
-# GHCR, tagged with the pushed vX.Y.Z tag and `latest`. Binaries are built on
+# Build the headroom-hook image for amd64 + arm64 and publish to Docker Hub,
+# tagged with the pushed vX.Y.Z tag and `latest`. Binaries are built on
 # NATIVE runners (no QEMU) then copied into a small distroless/cc image.
 #
 # NOTE (see Dockerfile): on Linux, headroom-core's default tree links the ONNX
@@ -17,7 +17,6 @@ on:
 
 env:
   DOCKERHUB_IMAGE: getbusbar/headroom-hook
-  GHCR_IMAGE: ghcr.io/getbusbar/headroom-hook
 
 jobs:
   # Per-arch binaries on native runners (arm64 built on arm64 — no emulation).
@@ -84,12 +83,6 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Resolve version
         id: ver
@@ -104,7 +97,6 @@ jobs:
         with:
           images: |
             ${{ env.DOCKERHUB_IMAGE }}
-            ${{ env.GHCR_IMAGE }}
           # tag build -> X.Y.Z + latest; bare dispatch -> `test`.
           tags: |
             type=semver,pattern={{version}},value=v${{ steps.ver.outputs.ver }},enable=${{ steps.ver.outputs.ver != '' }}

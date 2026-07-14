@@ -1,8 +1,8 @@
 # Grafana dashboard
 
 `headroom-dashboard.json` is a ready-to-import Grafana dashboard for the Headroom
-compression engine. It renders tokens saved, compression ratio, and latency straight
-from Prometheus.
+compression engine. It renders tokens saved, request throughput, and processing
+overhead straight from Prometheus.
 
 ## It works against either endpoint
 
@@ -26,10 +26,11 @@ point Prometheus at Headroom or at Busbar.
 
 ## Panels
 
-Tokens saved (runtime + lifetime), request rate, compression-ratio distribution
-(`histogram_quantile` over `headroom_compression_ratio_bucket`), compression latency
-p50/p95/p99, tokens-saved-per-second by pool, cache hit rate (Headroom proxy only),
-and requests by mode.
+Tokens saved, input tokens, request rate, average processing overhead
+(`headroom_overhead_ms_sum` / `headroom_overhead_ms_count`) with reported min/max,
+tokens-saved-per-second by pool, and request rate by pool. Built entirely on
+Headroom's real `/metrics` names — counters plus the `headroom_overhead_ms_*`
+millisecond summary; the proxy emits no histograms, so none are used.
 
 > This dashboard is also proposed upstream to
 > [headroomlabs-ai/headroom](https://github.com/headroomlabs-ai/headroom) so it can ship
