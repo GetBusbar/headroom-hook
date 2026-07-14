@@ -1,65 +1,50 @@
-# headroom-hook benchmarks
+# headroom-hook benchmarks (Docker)
 
-Every number we publish is produced by the scripts in this folder. All are stdlib
-Python + release builds, no external deps, and use a deterministic corpus
-([`corpus.py`](corpus.py)) so two runs produce byte-identical inputs. Results are
-written to `results/` as JSON; [`report.py`](report.py) renders the Markdown tables.
+One harness, one command. Every published number is produced by
+[`docker_ab.py`](docker_ab.py) running the **shipped images** — `getbusbar/busbar`
+and `getbusbar/headroom-hook` — exactly the way a `docker compose up` install runs
+them. No local build, no native binary: what you benchmark is what you deploy.
 
-## Reproduce every published number
-
-First build the hook (release):
+## Run it
 
 ```sh
-cargo build --release --manifest-path ../Cargo.toml
+python3 docker_ab.py --requests 1000 --concurrency 1 --history-kb 11
 ```
 
-| Published claim | Command | Where in the output |
-|---|---|---|
-| Per-call compression cost (150 µs @ 2 KB … 2.9 ms @ 64 KB) | `python3 hook_bench.py` | `results/hook_direct.json` → `latency_by_history_size` |
-| Token savings (2,832 → 1,422 = 49.8%; RAG 49.5%) | `python3 hook_bench.py` | `results/hook_direct.json` → `token_savings_by_content` |
-| Abstain rate (100% short chats / 0% compressible) | `python3 hook_bench.py` | `results/hook_direct.json` → `abstain` |
-| Added latency, busbar;dur p50/p90/p99 (base / +hook / added) | `BUSBAR_BIN=/path/to/busbar python3 busbar_ab.py --concurrency 1 --requests 1000` | `results/busbar_ab.json` → `delta[*].busbar_dur_us` |
-| Upstream-confirmed token savings end to end | same as above | `delta[*].tokens_per_req_{baseline,hook}` (tallied at the mock, not hook-side) |
-| Harness floor (~160 µs, why we report the delta) | `python3 floor.py` | stdout `p50_us` |
+Needs Docker and Python 3 (stdlib only). It pulls the images if absent, runs a
+baseline phase (busbar alone) and a hook phase (busbar + the Headroom gate) through
+the same deterministic request stream, and writes `results/docker_ab.json`.
 
-Render the tables:
+Flags: `--requests`, `--concurrency`, `--warmup`, `--history-kb`, `--delay-ms`.
+Pin images with `BUSBAR_IMAGE=` / `HOOK_IMAGE=` env vars.
 
-```sh
-python3 report.py results > results/RESULTS.md
-```
+## What it measures, and why it's honest
 
-## What each script does, and why
-
-- **`hook_bench.py`** — drives the hook's Unix socket DIRECTLY, no busbar in the
-  loop, speaking busbar's exact NDJSON wire (configure → ack, then transform).
-  This is the cleanest measure of the hook itself: per-call cost by history size,
-  token savings by content type, and abstain behavior.
-
-- **`busbar_ab.py`** — the honest end-to-end test: one busbar, two configs that
-  differ ONLY by the hook (`config.baseline.yaml` vs `config.hook.yaml`), same
-  request stream through both, per ingress protocol, against a **recording** mock
-  upstream. The mock tallies the tokens it actually received, which is what proves
-  the compressed prompt shipped upstream rather than being hook-side accounting.
-  We report the **delta** between the two phases: because both share the same
-  harness round-trip floor, the floor cancels and the delta is exactly the hook's
-  added cost. `--delay-ms N` models a real provider (the same delay on both paths,
-  so the delta is unchanged — it just sets the denominator for "overhead as % of a
-  call": 620 µs on a 2 s call is 0.03%).
-
-- **`floor.py`** — measures the rig's own round-trip (stdlib client → mock, no
-  busbar, no hook). It comes out ~160 µs, which is well ABOVE busbar's own
-  tens-of-µs overhead — so this rig deliberately does NOT try to report busbar's
-  solo cost as an absolute (busbar's own [benchmark](https://getbusbar.com/docs/benchmark/)
-  does that from busbar's internal clock). What this rig measures precisely is the
-  hook's added cost via the delta.
+- **Topology mirrors the real install.** A recording mock upstream
+  ([`mock_upstream.py`](mock_upstream.py)) tallies the chars that actually *arrived*
+  upstream — so a token reduction here proves the rewrite **shipped**, not that the
+  hook accounted for it internally. busbar shares the mock's network namespace so the
+  mock is reachable on `127.0.0.1` (busbar's plaintext-loopback carve-out); the hook
+  shares busbar's Unix-socket volume, exactly as `docker-compose.yml` wires them.
+- **The number is the delta.** We report the hook's added cost on busbar's OWN clock
+  (`busbar;dur`, the `Server-Timing` header). Baseline and hook phases share the same
+  harness/network floor, so it cancels in `hook − baseline` and the delta is the
+  hook's whole-path cost (gate round-trip + compression).
+- **Deterministic input.** [`corpus.py`](corpus.py) generates byte-identical noisy
+  tool-log history at `target_ratio: 0.5`, so two runs produce the same inputs.
 
 ## Honesty notes
 
-- Absolute per-request latencies from `busbar_ab.py` include the Python client and
-  mock overhead; only the **with/without-hook delta** is a clean hook number.
-- Savings are content- and setting-dependent (the corpus is noisy tool logs and
-  RAG dumps at `target_ratio: 0.5`); ordinary conversation isn't compressible and
-  the hook abstains on it.
-- The `busbar_ab.py` path needs a busbar binary (`BUSBAR_BIN=` or `--busbar-bin`).
-  busbar's release binary refuses non-loopback plaintext upstreams; the mock
-  config here uses a loopback `http://127.0.0.1` upstream, which busbar 1.3 allows.
+- Absolute `busbar;dur` scales with the host: on a small VM (e.g. a 2-core laptop
+  Docker VM) it reads high; on a real multi-core host it approaches busbar's native
+  tens-of-µs. **Report the host's core count with any absolute number**, or lean on
+  the delta, which is far more stable across hosts.
+- Savings are content- and setting-dependent: the corpus is compressible tool logs /
+  RAG dumps. Ordinary conversation isn't compressible and the hook abstains on it.
+
+## Smoke test
+
+[`../scripts/docker-smoke.sh <hook-image>`](../scripts/docker-smoke.sh) is the
+release-gate check: it boots the image the compose way and fails unless the hook
+runs, creates its socket, and a compressible request ships fewer tokens upstream —
+the check that would have caught a binary that builds but can't load or bind.

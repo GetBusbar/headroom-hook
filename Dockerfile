@@ -10,16 +10,27 @@
 # Until then, distroless/cc is the small, shell-less, glibc+libstdc++ base.
 #
 # The per-arch binaries are built on native runners in CI (.github/workflows/
-# docker.yml) and copied in; buildx selects the right one via TARGETARCH.
+# docker.yml) and copied in; buildx selects the right one via TARGETARCH. The
+# runner's toolchain (glibc 2.38 / libstdc++ CXXABI 1.3.15 on ubuntu-24.04) is
+# NEWER than debian 12 (glibc 2.36), so the base MUST be debian 13 (trixie,
+# glibc 2.40) or the binary aborts at load with a `GLIBC_2.38 not found` error.
 #
 # Run standalone:
 #   docker run --rm -v busbar-sock:/run/busbar getbusbar/headroom-hook
 # (busbar mounts the same volume and connects to /run/busbar/headroom.sock —
 #  see docker-compose.yml for the one-command "just works" setup.)
-FROM gcr.io/distroless/cc-debian12
+# Seed /run/busbar OWNED BY the nonroot runtime user (65532). When docker first
+# mounts the shared named volume here, it inherits this ownership — so the hook,
+# running as 65532, can create the socket. Without this the volume is root-owned
+# and the hook aborts with EACCES ("Permission denied") on bind.
+FROM busybox:latest AS prep
+RUN mkdir -p /run/busbar && chown 65532:65532 /run/busbar
+
+FROM gcr.io/distroless/cc-debian13
 
 ARG TARGETARCH
 COPY binaries/${TARGETARCH}/headroom-hook /headroom-hook
+COPY --from=prep --chown=65532:65532 /run/busbar /run/busbar
 
 # In a container the socket lives on a volume shared with busbar; the bare
 # binary still defaults to /tmp/headroom.sock when this env is unset.

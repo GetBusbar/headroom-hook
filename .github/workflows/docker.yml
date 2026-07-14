@@ -108,6 +108,25 @@ jobs:
             org.opencontainers.image.url=https://getbusbar.com/hooks/headroom
             org.opencontainers.image.licenses=Apache-2.0
 
+      # RELEASE GATE: build the amd64 image, load it, and prove it actually RUNS and
+      # COMPRESSES the compose way before we publish anything. Catches the class a
+      # `cargo test` can't — a binary that builds but can't LOAD in the runtime image
+      # (glibc/CXXABI) or can't CREATE its socket (volume ownership).
+      - name: Build amd64 image for smoke test
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: headroom-hook:smoke
+          provenance: false
+
+      - name: Docker smoke test (runs + compresses)
+        run: |
+          docker pull getbusbar/busbar:latest
+          chmod +x scripts/docker-smoke.sh
+          ./scripts/docker-smoke.sh headroom-hook:smoke getbusbar/busbar:latest
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
