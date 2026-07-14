@@ -1,7 +1,7 @@
 {
   "bench": "busbar_ab",
-  "uname": "Darwin Matthews-MacBook-Pro.local 25.5.0 Darwin Kernel Version 25.5.0: Tue Jun  9 22:28:34 PDT 2026; root:xnu-12377.121.10~1/RELEASE_ARM64_T6050 arm64",
-  "busbar_bin": "/Users/matthew/Developer/busbarAI/busbarAI/target/release/busbar",
+  "uname": "Darwin host.local 25.5.0 Darwin Kernel Version 25.5.0: Tue Jun  9 22:28:34 PDT 2026; root:xnu-12377.121.10~1/RELEASE_ARM64_T6050 arm64",
+  "busbar_bin": "busbar",
   "requests": 500,
   "concurrency": 1,
   "history_kb": 11,

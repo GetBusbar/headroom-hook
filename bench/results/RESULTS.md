@@ -1,6 +1,6 @@
 # headroom-hook — measured results
 
-Machine: `Darwin Matthews-MacBook-Pro.local 25.5.0 Darwin Kernel Version 25.5.0: Tue Jun  9 22:28:34 PDT 2026; root:xnu-12377.121.10~1/RELEASE_ARM64_T6050 arm64`
+Machine: `Darwin host.local 25.5.0 Darwin Kernel Version 25.5.0: Tue Jun  9 22:28:34 PDT 2026; root:xnu-12377.121.10~1/RELEASE_ARM64_T6050 arm64`
 
 ## Hook per-call cost (direct socket driver, release build, no busbar)
 

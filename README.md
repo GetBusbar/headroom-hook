@@ -224,5 +224,4 @@ pools:
 `scripts/smoke.sh` proves the socket protocol without busbar: the
 configure-ack handshake, a describe, and a rewrite round-trip on one
 connection, in busbar's order.
-`FEASIBILITY.md` has the full measurements, wire-contract findings, and
-packaging assessment.
+The `bench/` directory has the full measurement rig and results.
