@@ -117,6 +117,7 @@ seed the startup knobs; a configure push replaces them live, process-wide.
 
 ## Repo state
 
-- `GetBusbar/Hooks` created (private), cloned to
-  `~/Developer/busbarAI/Hooks`, one local commit, **not pushed**.
-- POC: `cargo run` (demo) or `cargo run -- <file> ["query"]`.
+- Lives in its own repo, `GetBusbar/headroom-hook` (was extracted from the
+  short-lived `GetBusbar/Hooks` monorepo — one repo per hook, for per-repo
+  access control).
+- Run: `cargo run --release`, or `docker compose up` (busbar + hook together).

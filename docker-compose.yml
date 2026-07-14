@@ -1,0 +1,45 @@
+# busbar + headroom-hook, composed — the "just works" setup.
+#
+#   docker compose up
+#
+# Two tiny images, two processes, one shared Unix socket. The hook owns the
+# socket; busbar connects to it. You own both lifecycles — busbar lazy-connects
+# and reconnects across restarts, so start order doesn't matter.
+#
+# What you provide: a busbar `config.yaml` next to this file (your providers,
+# models, and pools — see getbusbar.com/docs) with the hook registered:
+#
+#     hooks:
+#       headroom:
+#         kind: gate
+#         socket: /run/busbar/headroom.sock   # the shared-volume path below
+#         prompt: rw          # the rewrite grant
+#         global: true        # attach to every request
+#         on_error: nothing   # a broken compressor never touches a request
+#
+# That's the whole integration. Compression is now on every request across all
+# six protocols busbar speaks.
+
+services:
+  headroom:
+    image: getbusbar/headroom-hook
+    restart: unless-stopped
+    volumes:
+      - sock:/run/busbar          # the hook creates /run/busbar/headroom.sock here
+    # HEADROOM_SOCKET defaults to /run/busbar/headroom.sock in the image.
+
+  busbar:
+    image: getbusbar/busbar
+    restart: unless-stopped
+    depends_on: [headroom]
+    ports:
+      - "8080:8080"
+    volumes:
+      - sock:/run/busbar          # busbar sees the same socket file
+      - ./config.yaml:/etc/busbar/config.yaml:ro
+    # Pass provider credentials however you prefer, e.g.:
+    # environment:
+    #   - ANTHROPIC_KEY
+
+volumes:
+  sock: {}                        # a small shared volume, just for the socket

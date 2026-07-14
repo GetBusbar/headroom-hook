@@ -77,51 +77,60 @@ Reproduce every number: see [`bench/README.md`](bench/README.md).
 
 ## Install and run
 
-The hook is a small Rust binary you run yourself; busbar connects to it over a
-Unix socket. You own its lifecycle — busbar never spawns it, lazy-connects, and
+The hook is a small binary you run alongside busbar; busbar connects to it over
+a Unix socket. You own its lifecycle — busbar never spawns it, lazy-connects, and
 reconnects across restarts, so start order doesn't matter.
 
-**1a. Grab a prebuilt binary** (fastest), from the
-[latest release](https://github.com/GetBusbar/Hooks/releases/latest). Pick the line
-for your platform:
+### Docker (recommended): `docker compose up`
+
+Two tiny images, one shared socket. Drop this repo's [`docker-compose.yml`](docker-compose.yml)
+next to your busbar `config.yaml` (with the hook registered — see the compose
+file's header) and:
+
+```sh
+docker compose up
+```
+
+busbar and the compression hook come up together and Headroom is on every
+request. The images are `getbusbar/headroom-hook` and `getbusbar/busbar`.
+
+### Prebuilt binary
+
+Grab it from the [latest release](https://github.com/GetBusbar/headroom-hook/releases/latest):
 
 ```sh
 # Linux x86_64
-curl -fsSL -o headroom-hook https://github.com/GetBusbar/Hooks/releases/latest/download/headroom-hook-linux-x86_64
-
+curl -fsSL -o headroom-hook https://github.com/GetBusbar/headroom-hook/releases/latest/download/headroom-hook-linux-x86_64
 # Linux arm64
-curl -fsSL -o headroom-hook https://github.com/GetBusbar/Hooks/releases/latest/download/headroom-hook-linux-aarch64
-
+curl -fsSL -o headroom-hook https://github.com/GetBusbar/headroom-hook/releases/latest/download/headroom-hook-linux-aarch64
 # macOS (Apple Silicon)
-curl -fsSL -o headroom-hook https://github.com/GetBusbar/Hooks/releases/latest/download/headroom-hook-macos-arm64
-
+curl -fsSL -o headroom-hook https://github.com/GetBusbar/headroom-hook/releases/latest/download/headroom-hook-macos-arm64
 chmod +x headroom-hook
 ```
 
-Each release ships a `SHA256SUMS`; verify with `sha256sum -c SHA256SUMS`.
-
-**1b. Or build from source** (needs a Rust toolchain, [rustup](https://rustup.rs);
-also pins the `headroom-core` rev). Grab just this hook, not the whole repo:
-
-```sh
-git clone --filter=blob:none --sparse https://github.com/GetBusbar/Hooks
-cd Hooks && git sparse-checkout set Headroom
-cargo build --release --manifest-path Headroom/Cargo.toml
-# binary: Headroom/target/release/headroom-hook
-```
-
-**2. Run it** on a socket:
+Each release ships a `SHA256SUMS`; verify with `sha256sum -c SHA256SUMS`. Then run it on a socket:
 
 ```sh
 HEADROOM_SOCKET=/tmp/headroom.sock ./headroom-hook
 ```
 
-`HEADROOM_TARGET_RATIO` (default 0.5, the fraction of tokens to keep) and
-`HEADROOM_MIN_SAVINGS_PCT` (default 10, abstain below this saving) SEED the
-startup values — once busbar pushes settings over the wire, the push wins.
+### Build from source
 
-**3. Point busbar at the socket** (see the config block below), or register it
-live over the admin API. That's it.
+Needs a Rust toolchain ([rustup](https://rustup.rs)); the pinned `headroom-core` rev is in `Cargo.toml`.
+
+```sh
+git clone https://github.com/GetBusbar/headroom-hook && cd headroom-hook
+cargo build --release      # binary: target/release/headroom-hook
+```
+
+### Settings
+
+`HEADROOM_TARGET_RATIO` (default 0.5, the fraction of tokens to keep),
+`HEADROOM_MIN_SAVINGS_PCT` (default 10, abstain below this saving), and
+`HEADROOM_PRICE_UDOLLARS_PER_KTOK` (default 2500, the $-estimate price) SEED the
+startup values — once busbar pushes settings over the wire, the push wins. Point
+busbar at the socket (see the config block below) or register the hook live over
+the admin API. That's it.
 
 **OS support.** The hook speaks a Unix socket, so it runs on Linux and macOS
 (any arch). There is no native Windows build and no HTTP mode — on Windows, run
