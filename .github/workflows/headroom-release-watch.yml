@@ -1,0 +1,83 @@
+# Watch upstream headroom (headroomlabs-ai/headroom) for a NEW release and, when one appears that is
+# newer than what we're built against, bump our `headroom-core` pin to that release TAG, prove it
+# builds + tests green (lexical / no-ml), then bump our own patch version and push a `v*` tag — which
+# triggers docker.yml + release.yml to republish getbusbar/headroom-hook against the new headroom.
+#
+# Why polling (not a webhook): we don't control headroomlabs-ai/headroom, so their side can't dispatch
+# to us. A daily poll is the realistic catch. Manual `workflow_dispatch` is provided for an immediate run.
+#
+# FLOOR = the last headroom release that PREDATES the `ml`-feature gate (#2165). Only releases strictly
+# newer than the floor carry the gate, so we never bump onto a pre-gate release (which would drag the
+# whole ONNX stack back in). Until the first post-gate release ships we stay pinned to the merge commit.
+name: headroom-release-watch
+
+on:
+  schedule:
+    - cron: "17 6 * * *" # 06:17 UTC daily (off the :00 pileup)
+  workflow_dispatch: {}
+
+permissions:
+  contents: write # commit the bump + push the tag
+
+env:
+  UPSTREAM: headroomlabs-ai/headroom
+  FLOOR: v0.31.0
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Resolve latest upstream release + current pin
+        id: resolve
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          latest="$(gh api "repos/${UPSTREAM}/releases/latest" --jq .tag_name)"
+          current="$(grep -m1 'headroom-core' Cargo.toml | grep -oE 'tag = "[^"]+"' | cut -d'"' -f2 || true)"
+          echo "latest=$latest"  >> "$GITHUB_OUTPUT"
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+          # A bump is warranted iff latest is strictly greater than BOTH the floor and our current tag.
+          newest_vs_floor="$(printf '%s\n%s\n' "$latest" "$FLOOR" | sort -V | tail -1)"
+          bump=no
+          if [ "$latest" != "$FLOOR" ] && [ "$newest_vs_floor" = "$latest" ] && [ "$latest" != "$current" ]; then
+            bump=yes
+          fi
+          echo "bump=$bump" >> "$GITHUB_OUTPUT"
+          echo "::notice::upstream latest=$latest, current pin=${current:-<commit>}, floor=$FLOOR -> bump=$bump"
+
+      - name: Bump pin, build + test (lexical/no-ml), publish on green
+        if: steps.resolve.outputs.bump == 'yes'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LATEST: ${{ steps.resolve.outputs.latest }}
+        run: |
+          set -euo pipefail
+          # Re-pin headroom-core to the new release TAG (drops any rev pin), keeping default-features = false.
+          perl -0pi -e 's{headroom-core = \{ git = "https://github.com/headroomlabs-ai/headroom"[^}]*\}}{headroom-core = { git = "https://github.com/headroomlabs-ai/headroom", tag = "'"$LATEST"'", default-features = false }}' Cargo.toml
+          grep headroom-core Cargo.toml
+          cargo update -p headroom-core
+          # Prove the lexical build + tests are green against the new headroom BEFORE republishing.
+          cargo build --release --locked
+          cargo test --locked
+          # Bump our own patch version (a dependency bump is a new hook release).
+          old="$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)"
+          new="$(echo "$old" | awk -F. '{printf "%s.%s.%s", $1, $2, $3+1}')"
+          perl -0pi -e 's/^version = "'"$old"'"/version = "'"$new"'"/m' Cargo.toml
+          cargo update -p headroom-hook --precise "$new" 2>/dev/null || cargo generate-lockfile
+          git config user.name  "headroom-release-watch"
+          git config user.email "actions@users.noreply.github.com"
+          git add Cargo.toml Cargo.lock
+          git commit -m "chore(deps): headroom-core -> ${LATEST}; headroom-hook v${new}
+
+          Auto-bump by headroom-release-watch: upstream headroom released ${LATEST}, which now carries
+          the ml-feature gate. Built + tested green (lexical/no-ml). Republishing the hook image."
+          git push origin HEAD:main
+          git tag "v${new}" -m "headroom-hook v${new} — built on headroom ${LATEST}"
+          git push origin "v${new}"   # -> docker.yml + release.yml republish
+          echo "::notice::republished headroom-hook v${new} built on headroom ${LATEST}"

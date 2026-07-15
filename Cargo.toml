@@ -9,10 +9,12 @@ license = "Apache-2.0"
 [dependencies]
 # headroom-core with `default-features = false` — the lexical (BM25 TextCrusher) build, with the
 # ONNX stack (ort/fastembed/magika) feature-gated OUT. This hook only needs TextCrusher, so the
-# lexical build is ~7x smaller (29MB -> ~3MB) and avoids the ONNX-in-distroless slow path. Pinned
-# to the `ml`-feature-gate PR commit on the fork; re-pin to the upstream commit once it merges
-# (headroomlabs-ai/headroom#2165). The pin protects builds; bumps are manual + re-run the suite.
-headroom-core = { git = "https://github.com/MattJackson/headroom", rev = "304ec4244ff448ef71cd21d654342304c1afa6b2", default-features = false }
+# lexical build is ~7x smaller (29MB -> ~3MB) and avoids the ONNX-in-distroless slow path. The
+# `ml`-feature gate landed UPSTREAM in headroomlabs-ai/headroom#2165 (merged 2026-07-15), so we pin
+# to the upstream merge commit — the fork is retired. The gate is not in a release yet (latest is
+# v0.31.0, pre-merge); the docker CI (see .github/workflows/headroom-release-watch.yml) re-pins to
+# the first upstream RELEASE tag that contains the gate and rebuilds. The pin protects builds.
+headroom-core = { git = "https://github.com/headroomlabs-ai/headroom", rev = "cdba2eccddaaeb469abb05728e902c43954b5a51", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "signal", "time"] }

@@ -49,8 +49,9 @@ async fn main() -> std::io::Result<()> {
     };
     let listener = bind_socket(&socket)?;
     eprintln!(
-        "headroom-hook v{} listening on {socket} (target_ratio {}, min_savings {}%)",
+        "headroom-hook v{} (headroom-core {}) listening on {socket} (target_ratio {}, min_savings {}%)",
         env!("CARGO_PKG_VERSION"),
+        env!("HEADROOM_CORE_REF"),
         knobs.target_ratio,
         knobs.min_savings_pct
     );

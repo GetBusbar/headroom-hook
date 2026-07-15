@@ -657,7 +657,7 @@ dependencies = [
 [[package]]
 name = "headroom-core"
 version = "0.1.0"
-source = "git+https://github.com/MattJackson/headroom?rev=304ec4244ff448ef71cd21d654342304c1afa6b2#304ec4244ff448ef71cd21d654342304c1afa6b2"
+source = "git+https://github.com/headroomlabs-ai/headroom?rev=cdba2eccddaaeb469abb05728e902c43954b5a51#cdba2eccddaaeb469abb05728e902c43954b5a51"
 dependencies = [
  "aho-corasick",
  "blake3",
