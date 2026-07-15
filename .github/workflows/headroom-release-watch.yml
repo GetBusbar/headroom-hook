@@ -18,6 +18,7 @@ on:
 
 permissions:
   contents: write # commit the bump + push the tag
+  actions: write # `gh workflow run` the publish workflows (workflow_dispatch)
 
 env:
   UPSTREAM: headroomlabs-ai/headroom
@@ -79,5 +80,12 @@ jobs:
           the ml-feature gate. Built + tested green (lexical/no-ml). Republishing the hook image."
           git push origin HEAD:main
           git tag "v${new}" -m "headroom-hook v${new} — built on headroom ${LATEST}"
-          git push origin "v${new}"   # -> docker.yml + release.yml republish
+          git push origin "v${new}"
+          # A tag pushed with the built-in GITHUB_TOKEN does NOT trigger the `on: push: tags: v*`
+          # workflows (GitHub's recursion guard). workflow_dispatch is the documented EXCEPTION —
+          # GITHUB_TOKEN CAN trigger it — so kick docker.yml + release.yml explicitly against the new
+          # tag ref. Both derive their version from GITHUB_REF_NAME, so `--ref v${new}` yields the
+          # identical `X.Y.Z` + `latest` image tags a native tag-push would (no PAT/secret needed).
+          gh workflow run docker.yml  --ref "v${new}"
+          gh workflow run release.yml --ref "v${new}"
           echo "::notice::republished headroom-hook v${new} built on headroom ${LATEST}"
