@@ -1,6 +1,6 @@
 [package]
 name = "headroom-hook"
-version = "1.0.2"
+version = "1.0.3"
 edition = "2024"
 publish = false
 description = "busbar rewrite gate: compresses LLM chat history with headroom-core (BM25 TextCrusher) over busbar's Unix-socket hook wire"
@@ -14,7 +14,7 @@ license = "Apache-2.0"
 # to the upstream merge commit — the fork is retired. The gate is not in a release yet (latest is
 # v0.31.0, pre-merge); the docker CI (see .github/workflows/headroom-release-watch.yml) re-pins to
 # the first upstream RELEASE tag that contains the gate and rebuilds. The pin protects builds.
-headroom-core = { git = "https://github.com/headroomlabs-ai/headroom", rev = "cdba2eccddaaeb469abb05728e902c43954b5a51", default-features = false }
+headroom-core = { git = "https://github.com/headroomlabs-ai/headroom", tag = "v0.32.0", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "signal", "time"] }
