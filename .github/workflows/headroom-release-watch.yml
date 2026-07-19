@@ -60,7 +60,10 @@ jobs:
         run: |
           set -euo pipefail
           # Re-pin headroom-core to the new release TAG (drops any rev pin), keeping default-features = false.
-          perl -0pi -e 's{headroom-core = \{ git = "https://github.com/headroomlabs-ai/headroom"[^}]*\}}{headroom-core = { git = "https://github.com/headroomlabs-ai/headroom", tag = "'"$LATEST"'", default-features = false }}' Cargo.toml
+          # NOTE: use `~` as the s/// delimiter, NOT `{}` — the pattern/replacement contain literal braces
+          # and `[^}]`, which perl mis-balances against `{}` delimiters (dies with "Substitution replacement
+          # not terminated"). `~` never appears in a Cargo git-dep line, so it is a safe delimiter.
+          perl -0pi -e 's~headroom-core = \{ git = "https://github.com/headroomlabs-ai/headroom"[^}]*\}~headroom-core = { git = "https://github.com/headroomlabs-ai/headroom", tag = "'"$LATEST"'", default-features = false }~' Cargo.toml
           grep headroom-core Cargo.toml
           cargo update -p headroom-core
           # Prove the lexical build + tests are green against the new headroom BEFORE republishing.
