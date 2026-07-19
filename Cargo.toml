@@ -1,6 +1,6 @@
 [package]
 name = "headroom-hook"
-version = "1.0.3"
+version = "1.0.4"
 edition = "2024"
 publish = false
 description = "busbar rewrite gate: compresses LLM chat history with headroom-core (BM25 TextCrusher) over busbar's Unix-socket hook wire"
