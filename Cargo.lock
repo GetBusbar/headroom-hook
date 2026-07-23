@@ -693,7 +693,7 @@ dependencies = [
 
 [[package]]
 name = "headroom-hook"
-version = "1.0.7"
+version = "1.0.8"
 dependencies = [
  "headroom-core",
  "serde",
