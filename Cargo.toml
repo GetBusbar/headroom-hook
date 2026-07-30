@@ -20,12 +20,13 @@ crate-type = ["cdylib", "rlib"]
 headroom-core = { git = "https://github.com/headroomlabs-ai/headroom", tag = "v0.33.0", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# INTERIM: busbarAI is not yet public, so this is a local path dependency. Once busbarAI ships
-# publicly this MUST become a git or crates.io dependency — this path dep is a deliberate stopgap,
-# not a design decision.
-busbar-plugin-sdk = { path = "/Users/matthew/Developer/busbarAI/busbarAI/crates/plugin-sdk" }
+# INTERIM: busbarAI isn't public yet, so this is a local path dependency into a sibling checkout of
+# the monorepo. Once busbarAI ships publicly this should become a git (pinned rev/tag) or crates.io
+# dependency instead — same relative-path convention webrequest-hook's busbar-plugin-sdk dependency
+# already uses.
+busbar-plugin-sdk = { path = "../busbarAI/crates/plugin-sdk" }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "macros"] }
-busbar-plugin-loader = { path = "/Users/matthew/Developer/busbarAI/busbarAI/crates/plugin-loader" }
-busbar-api = { path = "/Users/matthew/Developer/busbarAI/busbarAI/crates/api" }
+busbar-plugin-loader = { path = "../busbarAI/crates/plugin-loader" }
+busbar-api = { path = "../busbarAI/crates/api" }
