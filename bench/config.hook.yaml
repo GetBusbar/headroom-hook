@@ -1,18 +1,29 @@
-# Hook phase: identical to config.baseline.yaml PLUS the Headroom gate, registered
-# exactly as the README recommends (global rewrite gate, prompt: rw, 25ms deadline,
-# fail-open). The hook container creates the socket in the shared /run/busbar volume.
+# Hook phase: identical to config.baseline.yaml PLUS the Headroom `kind: hook` dlopen plugin,
+# registered exactly as the busbar docs recommend (docs/hooks.md, docs/plugins.md): a global
+# prompt:rw rewrite gate at target_ratio 0.5 / min_savings_pct 10, with a timeout + on_error
+# fail-open equivalent to the old socket-hook deadline. Busbar loads the plugin IN-PROCESS (dlopen)
+# from `plugins.dir` — there is no separate hook container or Unix-socket volume anymore; one
+# busbar container serves both phases.
+#
+# `plugins.trust.allow_unsigned: true` is dev/bench-only: docker_ab.py packs the plugin cdylib
+# built from THIS checkout as an unsigned tarball (busbar-plugin-pack --allow-unsigned) so the
+# bench always measures the current source tree, not a stale signed release artifact. A real
+# deployment drops the signed tarball busbar's release CI produces and leaves allow_unsigned unset
+# (false); see docs/plugins.md#signing-and-packaging.
 listen: "0.0.0.0:8080"
-auth: { chain: [tokens], client_tokens: ["bench-token"] }
-providers: { mock: { api_key_env: BENCH_MOCK_KEY } }
-models: { bench-model: { provider: mock, max_concurrent: 256, max_requests: -1 } }
-pools: { bench-pool: { members: [ { target: bench-model } ] } }
-hooks:
-  headroom:
+auth: { chain: [] }
+providers: { mock: { api_key: { env: BENCH_MOCK_KEY } } }
+models: { bench-model: { provider: mock, max_concurrent: 256 } }
+pools: { bench-pool: { members: [ { model: bench-model } ] } }
+global_hooks:
+  - module: busbar-headroom
     kind: gate
-    socket: /run/busbar/headroom.sock
     prompt: rw
-    global: true
     timeout_ms: 25
     on_error: nothing
     settings: { target_ratio: 0.5, min_savings_pct: 10 }
+plugins:
+  enabled: true
+  dir: /etc/busbar/plugins
+  trust: { allow_unsigned: true }
 observability: { emit_server_timing: true }

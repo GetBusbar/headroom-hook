@@ -17,7 +17,7 @@ crate-type = ["cdylib", "rlib"]
 # to the upstream merge commit — the fork is retired. The gate is not in a release yet (latest is
 # v0.31.0, pre-merge); the docker CI (see .github/workflows/headroom-release-watch.yml) re-pins to
 # the first upstream RELEASE tag that contains the gate and rebuilds. The pin protects builds.
-headroom-core = { git = "https://github.com/headroomlabs-ai/headroom", tag = "v0.32.0", default-features = false }
+headroom-core = { git = "https://github.com/headroomlabs-ai/headroom", tag = "v0.33.0", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # INTERIM: busbarAI is not yet public, so this is a local path dependency. Once busbarAI ships

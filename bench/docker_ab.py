@@ -1,57 +1,69 @@
 #!/usr/bin/env python3
 # Copyright (C) 2026 Busbar Inc and contributors
 #
-# Docker A/B benchmark for the Headroom hook — the same methodology as ../busbar_ab.py, but every
-# component runs from the SHIPPED images (getbusbar/busbar, getbusbar/headroom-hook), driven exactly
-# the way a user's `docker compose up` install runs. It measures the hook's added cost on busbar's
-# OWN clock (`busbar;dur`), so the harness/network floor cancels in the with/without-hook delta.
+# Docker A/B benchmark for the Headroom hook — the same methodology as busbar's own *_ab.py
+# harnesses, but driven against a SHIPPED busbar image (getbusbar/busbar) the way a real install
+# runs it. It measures the hook's added cost on busbar's OWN clock (`busbar;dur`), so the
+# harness/network floor cancels in the with/without-hook delta.
 #
-# Topology (why it faithfully mirrors the real install):
+# Topology (1.5.0 signed dlopen plugin ABI — NOT the retired socket/webhook hook transports):
 #   * mock upstream — a recording OpenAI-shaped mock on 127.0.0.1:9001; tallies the chars that
 #     actually ARRIVED upstream, proving the rewrite shipped rather than being hook-side accounting.
-#   * busbar — the getbusbar/busbar image, sharing the mock container's NETWORK NAMESPACE so the
-#     mock is reachable at 127.0.0.1 (inside busbar's plaintext-loopback carve-out, same as a
-#     local-model deployment). Its :8080 is published through the mock container.
-#   * headroom — the getbusbar/headroom-hook image, sharing a Unix-socket VOLUME with busbar
-#     (/run/busbar), exactly as the published docker-compose.yml wires them.
+#   * busbar — ONE container, the getbusbar/busbar image, sharing the mock container's NETWORK
+#     NAMESPACE so the mock is reachable at 127.0.0.1 (busbar's plaintext-loopback carve-out, same
+#     as a local-model deployment). Its :8080 is published through the mock container.
 #
-# Baseline phase runs busbar alone; hook phase adds the headroom container + the gate in the config.
-# Same request stream (deterministic ../corpus.py) through both; we report the per-percentile delta.
+# There is no second "headroom-hook" container and no shared Unix-socket volume: a `kind: hook`
+# plugin loads IN-PROCESS (dlopen) inside the one busbar container. The hook phase differs from the
+# baseline phase ONLY in which config.yaml is mounted (config.hook.yaml adds `plugins:` +
+# `global_hooks:`) and in a `plugins/` directory bind-mounted at /etc/busbar/plugins containing the
+# Headroom plugin tarball — see `prep_plugin()` below.
+#
+# The plugin tarball is built and packed from THIS checkout (not pulled from a release), so the
+# bench always measures the current source tree: `cargo build --release` here, then
+# `busbar-plugin-pack pack --allow-unsigned` (the busbar-plugin-pack binary is built from the
+# busbarAI checkout — see BUSBARAI_DIR below). Both busbar and the plugin must target the SAME OS/
+# arch as the container (Linux); on a GitHub Actions Linux runner the host IS that arch, so a plain
+# `cargo build --release` is correct. On a non-Linux dev host (e.g. macOS), skip Docker and run
+# `../scripts/local_verify.sh`-style native verification instead — a locally-built .dylib cannot
+# dlopen inside a Linux container.
 #
 #   python3 docker_ab.py --requests 1000 --concurrency 1 --history-kb 11 [--delay-ms 0]
 #
-# Stdlib only (+ the docker CLI). Writes results/docker_ab.json and prints a summary.
+# Stdlib only (+ the docker CLI + cargo). Writes results/docker_ab.json and prints a summary.
 
 import argparse
 import http.client
 import json
 import os
+import re
+import shutil
 import subprocess
 import sys
 import time
 import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.dirname(HERE)  # headroom-hook checkout root
 sys.path.insert(0, HERE)  # corpus.py is a sibling in this folder
 import corpus  # noqa: E402
 
 BUSBAR_IMAGE = os.environ.get("BUSBAR_IMAGE", "getbusbar/busbar:latest")
-HOOK_IMAGE = os.environ.get("HOOK_IMAGE", "getbusbar/headroom-hook:latest")
 MOCK = "hb-mock"
 BUSBAR = "hb-busbar"
-HOOK = "hb-hook"
 # INTERNAL ports (inside the shared netns — fixed, never collide): busbar listens on
-# 8080 (see config*.yaml), the mock on 9001 (providers.mock.yaml points busbar there).
+# 8080 (see config*.yaml), the mock on 9001 (providers.yaml points busbar there).
 PORT = 8080
 MOCK_PORT = 9001
 # The only HOST-published port; override on a busy host with BENCH_PORT. The driver
 # and healthz poll this; the mock's /stats,/reset are reached in-container via docker exec.
 HOST_PORT = int(os.environ.get("BENCH_PORT", "8080"))
+PLUGIN_DIR = os.path.join(HERE, "plugins")  # bind-mounted read-only at /etc/busbar/plugins
 
 
-def sh(*args, check=True, quiet=True):
+def sh(*args, check=True, quiet=True, cwd=None):
     kw = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL} if quiet else {}
-    return subprocess.run(args, check=check, **kw)
+    return subprocess.run(args, check=check, cwd=cwd, **kw)
 
 
 def rm(*names):
@@ -115,7 +127,7 @@ def mock_get(path):
 
 def load(body, n, conc, warmup):
     """Drive n keep-alive POSTs (after `warmup`), collect busbar;dur µs samples."""
-    hdrs = {"authorization": "Bearer bench-token", "content-type": "application/json"}
+    hdrs = {"content-type": "application/json"}  # auth.chain: [] in bench configs — no bearer token
 
     def run(count):
         durs = []
@@ -163,17 +175,79 @@ def start_mock(delay_ms):
     time.sleep(2)
 
 
+def busbarai_dir():
+    """Locate the busbarAI checkout that provides busbar-plugin-pack.
+
+    headroom-hook/Cargo.toml currently carries an INTERIM absolute path dependency on
+    busbar-plugin-sdk (busbarAI is not yet public — see the Cargo.toml comment). Parse that same
+    path out of Cargo.toml rather than hardcoding it a second time here, so this script and
+    Cargo.toml can only drift together. Override with BUSBARAI_DIR for a CI checkout laid out
+    differently (e.g. busbarAI's own release.yml checks headroom-hook out as a ../ sibling and
+    patches this path — see that workflow's "Patch headroom-hook's interim path dependencies" step).
+    """
+    env = os.environ.get("BUSBARAI_DIR")
+    if env:
+        return env
+    cargo_toml = open(os.path.join(REPO, "Cargo.toml")).read()
+    m = re.search(r'path\s*=\s*"([^"]+)/crates/plugin-sdk"', cargo_toml)
+    if not m:
+        sys.exit("could not locate busbarAI checkout: no busbar-plugin-sdk path dep in Cargo.toml "
+                 "and BUSBARAI_DIR is not set")
+    return m.group(1)
+
+
+def prep_plugin():
+    """Build the Headroom cdylib from THIS checkout and pack it as an unsigned dev tarball.
+
+    Requires the host arch/OS to match the busbar container's (Linux) — see the module docstring.
+    Writes plugins/busbar-headroom.tar.gz, bind-mounted read-only at /etc/busbar/plugins by
+    start_busbar() for the hook phase. config.hook.yaml sets plugins.trust.allow_unsigned: true to
+    accept it; a real deployment installs busbar's release-CI-signed tarball instead.
+    """
+    print("building headroom-hook cdylib (cargo build --release)...", file=sys.stderr)
+    sh("cargo", "build", "--release", cwd=REPO, quiet=False)
+
+    ext = "dylib" if sys.platform == "darwin" else "so"
+    lib = os.path.join(REPO, "target", "release", f"libheadroom_hook.{ext}")
+    if not os.path.exists(lib):
+        sys.exit(f"expected cdylib not found: {lib} (did the release build produce it?)")
+
+    bdir = busbarai_dir()
+    print(f"building busbar-plugin-pack from {bdir} ...", file=sys.stderr)
+    sh("cargo", "build", "--release", "-p", "busbar-plugin-pack", cwd=bdir, quiet=False)
+    pack = os.path.join(bdir, "target", "release", "busbar-plugin-pack")
+    if not os.path.exists(pack):
+        sys.exit(f"busbar-plugin-pack binary not found at {pack}")
+
+    # cheap TOML scrape (avoids a tomllib dep / import ordering fuss): version = "x.y.z"
+    ver_m = re.search(r'(?m)^version\s*=\s*"([^"]+)"', open(os.path.join(REPO, "Cargo.toml")).read())
+    version = ver_m.group(1) if ver_m else "0.0.0"
+
+    shutil.rmtree(PLUGIN_DIR, ignore_errors=True)
+    os.makedirs(PLUGIN_DIR, exist_ok=True)
+    out = os.path.join(PLUGIN_DIR, "busbar-headroom.tar.gz")
+    sh(pack, "pack",
+       "--lib", lib,
+       "--name", "busbar-headroom", "--alias", "headroom", "--kind", "hook",
+       "--version", version, "--publisher", "busbar", "--license", "Apache-2.0",
+       "--needs-prompt", "rw", "--allow-unsigned",
+       "--out", out,
+       quiet=False)
+    if not os.path.exists(out):
+        sys.exit(f"plugin pack did not produce {out}")
+    print(f"packed {out}", file=sys.stderr)
+
+
 def start_busbar(config, with_hook):
-    rm(BUSBAR, HOOK)
-    if with_hook:
-        sh("docker", "run", "-d", "--name", HOOK, "-v", "hb-sock:/run/busbar", HOOK_IMAGE)
-        time.sleep(1)
+    rm(BUSBAR)
     args = ["docker", "run", "-d", "--name", BUSBAR, "--network", f"container:{MOCK}",
             "-e", "BENCH_MOCK_KEY=x", "-e", "BUSBAR_STATE_FILE=",
             "-v", f"{HERE}/{config}:/etc/busbar/config.yaml:ro",
             "-v", f"{HERE}/providers.mock.yaml:/etc/busbar/providers.yaml:ro"]
     if with_hook:
-        args += ["-v", "hb-sock:/run/busbar"]
+        # The whole hook phase, vs. baseline, is: this one extra mount + config.hook.yaml's
+        # `plugins:`/`global_hooks:` blocks. No second container, no socket volume.
+        args += ["-v", f"{PLUGIN_DIR}:/etc/busbar/plugins:ro"]
     args += [BUSBAR_IMAGE]
     sh(*args)
     if not wait_ready():
@@ -203,24 +277,29 @@ def main():
     ap.add_argument("--warmup", type=int, default=50)
     ap.add_argument("--history-kb", type=int, default=11)
     ap.add_argument("--delay-ms", type=int, default=0)
+    ap.add_argument("--skip-plugin-build", action="store_true",
+                     help="reuse an existing plugins/busbar-headroom.tar.gz instead of rebuilding")
     args = ap.parse_args()
 
-    sh("docker", "volume", "rm", "hb-sock", check=False)
-    sh("docker", "volume", "create", "hb-sock")
+    if not args.skip_plugin_build:
+        prep_plugin()
+    elif not os.path.exists(os.path.join(PLUGIN_DIR, "busbar-headroom.tar.gz")):
+        sys.exit("--skip-plugin-build given but plugins/busbar-headroom.tar.gz does not exist")
+
     try:
         start_mock(args.delay_ms)
         base = measure("config.baseline.yaml", False, args)
         hook = measure("config.hook.yaml", True, args)
     finally:
-        rm(MOCK, BUSBAR, HOOK)
-        sh("docker", "volume", "rm", "hb-sock", check=False)
+        rm(MOCK, BUSBAR)
 
     delta = {q: (hook["busbar_dur_us"][q] - base["busbar_dur_us"][q])
              for q in ("p50", "p90", "p99")}
     saved_pct = round(100 * (1 - hook["tokens_per_req"] / max(1, base["tokens_per_req"])), 1)
     result = {
         "config": vars(args),
-        "images": {"busbar": BUSBAR_IMAGE, "hook": HOOK_IMAGE},
+        "images": {"busbar": BUSBAR_IMAGE},
+        "plugin": "built from this checkout, packed unsigned (dev mode)",
         "baseline": base, "hook": hook,
         "added_busbar_dur_us": delta,
         "tokens": {"baseline": base["tokens_per_req"], "hook": hook["tokens_per_req"],
