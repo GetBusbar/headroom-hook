@@ -1,100 +1,63 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! The pure half of the hook: busbar's wire line in, reply JSON out.
+//! The pure half of the plugin: busbar's `transform` payload in, reply JSON out — plus the
+//! `configure`/`describe`/`status` support types the [`crate::Headroom`] gate wires into
+//! [`busbar_plugin_sdk::HookHandler`].
 //!
-//! Busbar's **5-message wire** (engine `src/hooks/wire.rs` + `src/hooks/socket.rs`, verified
-//! against the source, 2026-07-12): `configure`, `describe`, `decide`, `transform`, `notify` — all
-//! newline-delimited JSON on the one kept-alive connection, discriminated by the top-level key.
+//! This module has NO knowledge of the dlopen ABI or the SDK trait; it is exhaustively unit
+//! testable on its own (kept as a straight port of the original Unix-socket hook's pure logic —
+//! `headroom-hook` v1.0.14's `src/compress.rs` — now driven by the new plugin's method calls
+//! instead of a raw wire line).
 //!
-//! Management messages:
-//! - `configure` — `{"configure": {"hook", "settings": {...}, "settings_version", "busbar_version"}}`.
-//!   Busbar sends it as the FIRST line on every (re)connection, and re-pushes it live when an
-//!   operator calls `PATCH /api/v1/admin/hooks/{name}/settings`. Commit-on-ack: we reply
-//!   `{"ack": {"settings_version": N}}` (echoing the pushed version) ONLY when the settings applied
-//!   cleanly; anything else and busbar treats the configure as not committed (the PATCH gets a 400,
-//!   we keep serving on our previous settings).
-//! - `describe` — `{"describe": true}`. We reply the `{schema, dashboard}` self-description: the
-//!   settings JSON Schema (served at `GET /api/v1/admin/hooks/{name}/schema`) and the dashboard
-//!   widget layout. ONE declaration drives both the config form and the plugin dashboard.
-//! - `status` — `{"status": true}`. We reply our OBSERVED settings + a metrics ARRAY (Prometheus-
-//!   shaped: per-pool `labels`, `histogram` quantiles, `estimated` values with a CI). Busbar surfaces
-//!   it live at `GET /api/v1/admin/hooks/{name}/status` AND on its `/metrics/hooks` Prometheus scrape,
-//!   so a dashboard built against these metric names just works.
+//! ## Payload shape (unchanged from the old socket wire, for the `transform` op)
 //!
-//! Decision traffic (unchanged from the 3-message wire):
-//! - The hook RECEIVES `{"request": {..., "system"?, "messages"?: [{"role","text"}]}, "candidates":
-//!   [...], "context": {...}}`. A `prompt: rw` gate always gets `system`/`messages` on the
-//!   transform pass (`build_rewrite_request` sends the prompt unconditionally).
-//! - The hook REPLIES `{"rewrite": {"messages": [...]}}` where each entry is spliced VERBATIM into
-//!   the pending request body's `messages` array (`apply_rewrite_to_body`). The body at that point
-//!   is the ingress dialect's chat shape, so entries must be BODY-form `{"role": ..., "content":
-//!   ...}` — NOT the projection's `{role, text}` form. `{}` is abstain (proceed unmodified).
-//! - Busbar is fail-closed on our side: a malformed/oversized/slow reply means the ORIGINAL body
-//!   proceeds — this hook can degrade, it can never corrupt.
+//! The engine's `hooks::wire` projection carries the granted prompt as `{"request": {"pool"?,
+//! "messages"?: [{"role", "text"}]}}` — the SAME shape the old socket wire's `HookLine{request}`
+//! read (just no longer wrapped in a `candidates`/`context` envelope we ignored anyway). We read
+//! ONLY `text` on input messages (never `content` — the old code never did), and we emit BODY-form
+//! `{"role", "content"}` on output, verbatim from the old code. That asymmetry is deliberate and
+//! real, not a bug: the engine splices our reply straight into the pending request body's
+//! `messages` array, which is BODY-form, not projection-form.
+//!
+//! Rewrite strategy — compress the HISTORY, keep the ask: the LAST message is preserved verbatim
+//! and its text becomes the BM25 relevance query for every earlier message, so the parts of the
+//! history that matter to the current ask survive. TextCrusher itself passes short texts (<6
+//! segments) through unchanged, and we abstain outright when total savings are below
+//! `min_savings_pct` — a no-win rewrite costs a body re-render for nothing.
 
 use headroom_core::transforms::TextCrusher;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::{Mutex, RwLock};
 
-/// Busbar caps hook reply lines at 64 KiB (`socket.rs` `MAX_REPLY_BYTES`) — a longer line is a
-/// protocol error that drops the connection AND the reply. `encode_reply` enforces the cap on our
-/// side: an over-cap reply degrades to abstain (original body proceeds, connection survives).
-pub const MAX_REPLY_BYTES: usize = 64 * 1024;
-
-/// One message of busbar's prompt projection (`{role, text}` — flattened text form).
+/// One message of the engine's prompt projection (`{role, text}` — flattened text form).
 #[derive(Deserialize)]
 struct ProjMessage {
     role: String,
     text: String,
 }
 
-/// The slice of `HookRequest.request` this hook reads. Everything else is ignored (the wire is
-/// append-only; unknown fields must never break a hook).
+/// The slice of the `transform` payload's `request` this gate reads. Everything else is ignored
+/// (the projection is append-only; unknown fields must never break a hook).
 #[derive(Deserialize)]
 struct ProjRequest {
-    /// The pool this request routes through — the label dimension for every per-pool metric. Absent
-    /// on an older engine / a probe folds into an `"unknown"` bucket rather than dropping the count.
+    /// The pool this request routes through — the label dimension for every per-pool metric.
+    /// Absent on an older engine / a probe folds into an `"unknown"` bucket rather than dropping
+    /// the count.
     #[serde(default)]
     pool: Option<String>,
     #[serde(default)]
     messages: Option<Vec<ProjMessage>>,
 }
 
+/// The whole `transform` payload shape: `{"request": {...}}`.
 #[derive(Deserialize)]
 struct HookLine {
     request: ProjRequest,
 }
 
-/// The `configure` push (engine `wire::ConfigureMsg`). Only the fields we act on are typed;
-/// `hook`/`busbar_version` are context echoes we don't need (the wire is append-only — unknown
-/// fields must never break a hook).
-#[derive(Deserialize)]
-struct ConfigureLine {
-    configure: ConfigureBody,
-}
-
-#[derive(Deserialize)]
-struct ConfigureBody {
-    #[serde(default)]
-    settings: serde_json::Map<String, Value>,
-    settings_version: u64,
-}
-
-/// The `describe` request: `{"describe": true}`.
-#[derive(Deserialize)]
-struct DescribeLine {
-    describe: bool,
-}
-
-/// The `status` request: `{"status": true}`.
-#[derive(Deserialize)]
-struct StatusLine {
-    status: bool,
-}
-
-/// Compression knobs (env-seeded in `main`, replaced live by `configure` pushes).
+/// Compression knobs (config-seeded at `open`, replaced live by `configure` pushes).
 #[derive(Clone, Copy)]
 pub struct Knobs {
     /// Fraction of tokens to KEEP per compressed message (TextCrusher `target_ratio`).
@@ -102,9 +65,9 @@ pub struct Knobs {
     /// Abstain unless the whole-prompt char savings reach this percentage.
     pub min_savings_pct: f64,
     /// Assumed input price in micro-dollars per 1,000 tokens, used to turn tokens-saved into the
-    /// estimated `dollars_saved` metric (busbar's measured `/usage` spend is the separate truth; this
-    /// is the hook's own estimate, marked `estimated` with a confidence interval). Default 2,500 ≈
-    /// $2.50 / 1M input tokens.
+    /// estimated `dollars_saved` metric (busbar's measured `/usage` spend is the separate truth;
+    /// this is the hook's own estimate, marked `estimated` with a confidence interval). Default
+    /// 2,500 ≈ $2.50 / 1M input tokens.
     pub price_udollars_per_ktok: f64,
     /// The `settings_version` of the last committed `configure`, echoed in `status` so busbar can
     /// compute version drift. 0 until the first configure.
@@ -123,10 +86,10 @@ impl Default for Knobs {
 }
 
 /// Apply a pushed settings map as DESIRED STATE: present keys override, absent keys reset to the
-/// built-in defaults — so re-pushing the same map is a no-op (idempotent, as the wire requires).
-/// FAIL-CLOSED on commit: an unknown key or an out-of-shape/out-of-range value returns `Err`, the
-/// caller does NOT ack, and busbar keeps our previous settings (the operator's PATCH gets a 400
-/// instead of us half-applying a map we didn't understand).
+/// built-in defaults — so re-pushing the same map is a no-op (idempotent). FAIL-CLOSED on commit:
+/// an unknown key or an out-of-shape/out-of-range value returns `Err`, the caller does NOT commit,
+/// and the gate keeps its previous settings (the operator's `configure` push is NACKed instead of
+/// us half-applying a map we didn't understand).
 pub fn apply_settings(settings: &serde_json::Map<String, Value>) -> Result<Knobs, String> {
     let mut knobs = Knobs::default();
     for (key, value) in settings {
@@ -166,10 +129,10 @@ pub fn apply_settings(settings: &serde_json::Map<String, Value>) -> Result<Knobs
     Ok(knobs)
 }
 
-/// The `describe` reply ENVELOPE (busbar `wire::DescribeReply`): `{schema, dashboard}`. `schema` is
-/// the settings JSON Schema busbar serves verbatim at `GET /api/v1/admin/hooks/{name}/schema` (the
-/// config form); `dashboard` declares the widget layout for the plugin dashboard, whose values come
-/// from `status.metrics` matched by `metric` name. ONE declaration drives both.
+/// The `describe` reply ENVELOPE: `{schema, dashboard}`. `schema` is the settings JSON Schema the
+/// engine serves verbatim at `GET /api/v1/admin/hooks/{name}/schema` (the config form); `dashboard`
+/// declares the widget layout for the plugin dashboard, whose values come from `status.metrics`
+/// matched by `metric` name. ONE declaration drives both.
 pub fn describe_reply() -> Value {
     json!({
         "schema": settings_schema(),
@@ -207,23 +170,9 @@ pub fn settings_schema() -> Value {
     })
 }
 
-/// Serialize a reply into its newline-terminated wire line, enforcing busbar's 64 KiB reply cap.
-/// A reply that would exceed the cap (a very large history whose compressed form is still >64 KiB
-/// of JSON) is replaced with abstain: busbar would drop an over-cap line as a protocol error and
-/// tear down the connection, so degrading to "proceed with the original body" on a live connection
-/// strictly dominates. Serialization failure likewise degrades to abstain.
-pub fn encode_reply(reply: &Value) -> Vec<u8> {
-    let mut out = serde_json::to_vec(reply).unwrap_or_else(|_| b"{}".to_vec());
-    out.push(b'\n');
-    if out.len() > MAX_REPLY_BYTES {
-        return b"{}\n".to_vec();
-    }
-    out
-}
-
 /// Per-pool operational tallies — the raw material for the `status` metrics array. Field names and
 /// units mirror Headroom's real `/metrics` exposition so busbar re-exposes them 1:1. One process
-/// serves many pools; busbar sends `request.pool` on every transform, so we key by it.
+/// serves many pools; the engine sends `request.pool` on every transform, so we key by it.
 #[derive(Default)]
 struct PoolStat {
     /// Transform requests SEEN on this pool — `headroom_requests_total`.
@@ -254,58 +203,14 @@ fn est_tokens(chars: u64) -> u64 {
     chars.div_ceil(4)
 }
 
-/// Handle one busbar wire line; returns the reply JSON (one line, no trailing newline).
-///
-/// Dispatch is by the top-level key, as the wire specifies: `configure` applies settings and acks,
-/// `describe` returns the schema, everything else is decision traffic. Busbar serializes the
-/// management messages compactly with the discriminating key FIRST, so a cheap prefix check avoids
-/// a second full parse of every (potentially multi-MB) request line; a management line that
-/// somehow misses the prefix falls through to the request parse and abstains — which busbar
-/// already treats as "configure not committed" / "no schema": fail-safe either way.
-///
-/// Rewrite strategy — compress the HISTORY, keep the ask: the LAST message is preserved verbatim
-/// and its text becomes the BM25 relevance query for every earlier message, so the parts of the
-/// history that matter to the current ask survive. TextCrusher itself passes short texts
-/// (<6 segments) through unchanged, and we abstain outright when total savings are below
-/// `min_savings_pct` — a no-win rewrite costs a body re-render for nothing.
-pub fn handle_line(line: &[u8], knobs: &RwLock<Knobs>, metrics: &Mutex<Metrics>) -> Value {
+/// The `transform` op: compress the granted prompt's history, keep the ask. Returns `{}` (abstain)
+/// whenever there is no grant, no/too-short history, or the savings don't clear `min_savings_pct`;
+/// otherwise `{"rewrite": {"messages": [...]}}` with each entry in BODY form
+/// (`{"role", "content"}`), spliced verbatim into the pending request by the engine.
+pub fn run_transform(payload: &Value, knobs: &RwLock<Knobs>, metrics: &Mutex<Metrics>) -> Value {
     let abstain = json!({});
-    let head = line.trim_ascii_start();
-    if head.starts_with(b"{\"configure\"") {
-        let Ok(msg) = serde_json::from_slice::<ConfigureLine>(line) else {
-            // Unparsable configure: no ack — busbar keeps our previous settings.
-            return json!({"error": "malformed configure message"});
-        };
-        return match apply_settings(&msg.configure.settings) {
-            Ok(mut new) => {
-                // Record the committed version so `status` can report it for busbar's drift check.
-                new.settings_version = msg.configure.settings_version;
-                // Poison-tolerant: `Knobs` is `Copy` and writes are single assignments, so a
-                // poisoned lock holds a fully-written value — recover it, never panic on the
-                // request path.
-                *knobs.write().unwrap_or_else(|e| e.into_inner()) = new;
-                json!({"ack": {"settings_version": msg.configure.settings_version}})
-            }
-            Err(e) => json!({"error": e}),
-        };
-    }
-    if head.starts_with(b"{\"describe\"") {
-        return match serde_json::from_slice::<DescribeLine>(line) {
-            Ok(DescribeLine { describe: true }) => describe_reply(),
-            _ => abstain,
-        };
-    }
-    // STATUS: `{"status": true}` -> our OBSERVED settings + self-reported metrics (an ARRAY of
-    // Prometheus-shaped entries busbar surfaces on the admin API AND its /metrics/hooks scrape).
-    if head.starts_with(b"{\"status\"") {
-        return match serde_json::from_slice::<StatusLine>(line) {
-            Ok(StatusLine { status: true }) => build_status(knobs, metrics),
-            _ => abstain,
-        };
-    }
-    let knobs = *knobs.read().unwrap_or_else(|e| e.into_inner());
     // Not our shape / no prompt projection (e.g. a decide fire, or a grant misconfig) -> abstain.
-    let Ok(parsed) = serde_json::from_slice::<HookLine>(line) else {
+    let Ok(parsed) = serde_json::from_value::<HookLine>(payload.clone()) else {
         return abstain;
     };
     let pool = parsed.request.pool.unwrap_or_else(|| "unknown".to_string());
@@ -317,6 +222,7 @@ pub fn handle_line(line: &[u8], knobs: &RwLock<Knobs>, metrics: &Mutex<Metrics>)
         return abstain;
     }
 
+    let knobs_v = *knobs.read().unwrap_or_else(|e| e.into_inner());
     let started = std::time::Instant::now();
     let query = messages.last().map(|m| m.text.clone()).unwrap_or_default();
     let crusher = TextCrusher::default();
@@ -336,7 +242,7 @@ pub fn handle_line(line: &[u8], knobs: &RwLock<Knobs>, metrics: &Mutex<Metrics>)
             // the closure only reads `&m.text`/`&query` and the crusher is dropped either way.)
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 crusher
-                    .compress(&m.text, &query, Some(knobs.target_ratio))
+                    .compress(&m.text, &query, Some(knobs_v.target_ratio))
                     .compressed
             }))
             .unwrap_or_else(|_| m.text.clone())
@@ -352,7 +258,7 @@ pub fn handle_line(line: &[u8], knobs: &RwLock<Knobs>, metrics: &Mutex<Metrics>)
     } else {
         100.0 * (chars_before.saturating_sub(chars_after)) as f64 / chars_before as f64
     };
-    let committed = chars_before > 0 && savings_pct >= knobs.min_savings_pct;
+    let committed = chars_before > 0 && savings_pct >= knobs_v.min_savings_pct;
 
     // Record metrics for this request (poison-tolerant; one short critical section).
     {

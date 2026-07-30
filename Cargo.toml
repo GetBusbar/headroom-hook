@@ -3,8 +3,11 @@ name = "headroom-hook"
 version = "1.0.14"
 edition = "2024"
 publish = false
-description = "busbar rewrite gate: compresses LLM chat history with headroom-core (BM25 TextCrusher) over busbar's Unix-socket hook wire"
+description = "busbar first-party kind:hook plugin (dlopen cdylib): compresses LLM chat history with the real headroom-core BM25 TextCrusher engine as a prompt:rw rewrite gate."
 license = "Apache-2.0"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 # headroom-core with `default-features = false` — the lexical (BM25 TextCrusher) build, with the
@@ -17,4 +20,12 @@ license = "Apache-2.0"
 headroom-core = { git = "https://github.com/headroomlabs-ai/headroom", tag = "v0.32.0", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "signal", "time"] }
+# INTERIM: busbarAI is not yet public, so this is a local path dependency. Once busbarAI ships
+# publicly this MUST become a git or crates.io dependency — this path dep is a deliberate stopgap,
+# not a design decision.
+busbar-plugin-sdk = { path = "/Users/matthew/Developer/busbarAI/busbarAI/crates/plugin-sdk" }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros"] }
+busbar-plugin-loader = { path = "/Users/matthew/Developer/busbarAI/busbarAI/crates/plugin-loader" }
+busbar-api = { path = "/Users/matthew/Developer/busbarAI/busbarAI/crates/api" }

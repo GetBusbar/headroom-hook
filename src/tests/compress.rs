@@ -1,19 +1,23 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! Tests for `compress` (kept out of the core file so it reads lean).
+//! Tests for `compress` (kept out of the core file so it reads lean). Ported from the old
+//! Unix-socket hook's `src/tests/compress.rs`, adapted from `handle_line(&bytes, &knobs, &metrics)`
+//! to the new plugin's pure `run_transform(&payload, &knobs, &metrics)` call surface — building the
+//! `transform` payload shape directly (`{"request": {"pool", "messages": [{"role","text"}, ...]}}`)
+//! instead of a whole socket-wire line.
 
 use super::*;
 
-/// Test convenience: wrap knobs the way `main` does.
+/// Test convenience: wrap knobs the way `Headroom::new` does.
 fn locked(knobs: Knobs) -> RwLock<Knobs> {
     RwLock::new(knobs)
 }
 
-/// Call the dispatcher with a throwaway metrics accumulator (tests that assert metrics build
+/// Call `run_transform` with a throwaway metrics accumulator (tests that assert metrics build
 /// their own).
-fn call(line: &[u8], knobs: &RwLock<Knobs>) -> Value {
-    handle_line(line, knobs, &Mutex::new(Metrics::default()))
+fn transform(payload: &Value, knobs: &RwLock<Knobs>) -> Value {
+    run_transform(payload, knobs, &Mutex::new(Metrics::default()))
 }
 
 /// A synthetic log-dump line set: many segments, mostly noise, one load-bearing ERROR.
@@ -31,27 +35,21 @@ fn log_dump(lines: usize) -> String {
     s
 }
 
-fn wire_line(messages: Vec<(&str, String)>) -> Vec<u8> {
+/// Build the `transform` payload the engine's `hooks::wire` projects: `{"request": {"pool",
+/// "messages": [{"role","text"}, ...]}}` — the same shape the old socket wire's `HookLine{request}`
+/// read (minus the `candidates`/`context` envelope we never used).
+fn transform_payload(messages: Vec<(&str, String)>) -> Value {
     let msgs: Vec<Value> = messages
         .iter()
         .map(|(r, t)| json!({"role": r, "text": t}))
         .collect();
-    serde_json::to_vec(&json!({
-        "request": {
-            "pool": "p", "ingress_protocol": "anthropic", "message_count": msgs.len(),
-            "has_tools": false, "total_chars": 0, "stream": false,
-            "messages": msgs
-        },
-        "candidates": [],
-        "context": {"pool": "p", "budget_remaining": null}
-    }))
-    .unwrap()
+    json!({"request": {"pool": "p", "messages": msgs}})
 }
 
 /// A long history compresses; the reply is the rewrite arm in BODY form, ask kept verbatim.
 #[test]
 fn compresses_history_keeps_ask() {
-    let line = wire_line(vec![
+    let payload = transform_payload(vec![
         ("user", log_dump(40)),
         ("assistant", log_dump(40)),
         ("user", "why did the deployment fail".to_string()),
@@ -61,7 +59,7 @@ fn compresses_history_keeps_ask() {
         min_savings_pct: 10.0,
         ..Knobs::default()
     });
-    let reply = call(&line, &knobs);
+    let reply = transform(&payload, &knobs);
     let msgs = reply["rewrite"]["messages"]
         .as_array()
         .expect("rewrite arm");
@@ -80,131 +78,92 @@ fn compresses_history_keeps_ask() {
 /// A short chat abstains (`{}`) — nothing worth compressing.
 #[test]
 fn short_chat_abstains() {
-    let line = wire_line(vec![
+    let payload = transform_payload(vec![
         ("user", "hello".to_string()),
         ("assistant", "hi".to_string()),
         ("user", "how are you".to_string()),
     ]);
-    let reply = call(&line, &locked(Knobs::default()));
+    let reply = transform(&payload, &locked(Knobs::default()));
     assert_eq!(reply, json!({}), "short prompts must pass through");
 }
 
-/// A shape-only projection (no prompt grant / a decide fire) abstains.
+/// A shape-only payload (no prompt grant / a decide fire) abstains: no `messages` at all, and no
+/// `request` key at all.
 #[test]
 fn no_prompt_projection_abstains() {
-    let line = serde_json::to_vec(&json!({
-        "request": {"pool": "p", "ingress_protocol": "openai", "message_count": 1,
-                    "has_tools": false, "total_chars": 10, "stream": false},
-        "candidates": [], "context": {"pool": "p", "budget_remaining": null}
-    }))
-    .unwrap();
-    assert_eq!(call(&line, &locked(Knobs::default())), json!({}));
-}
-
-/// Garbage in -> abstain, never a panic (busbar treats our failure as proceed-unmodified,
-/// but we should not crash the process either).
-#[test]
-fn malformed_line_abstains() {
-    assert_eq!(call(b"not json", &locked(Knobs::default())), json!({}));
-    assert_eq!(call(b"{}", &locked(Knobs::default())), json!({}));
-}
-
-/// The configure-ack handshake: a pushed settings map is applied LIVE and the ack echoes the
-/// pushed `settings_version` — the shape busbar's commit-on-ack requires. Behavior proof: a
-/// history that rewrites under the defaults abstains once `min_savings_pct: 100` is pushed.
-#[test]
-fn configure_acks_version_and_applies_settings_live() {
-    let knobs = locked(Knobs::default());
-    let req = wire_line(vec![
-        ("user", log_dump(40)),
-        ("user", "why did the deployment fail".to_string()),
-    ]);
-    assert!(
-        call(&req, &knobs).get("rewrite").is_some(),
-        "defaults must rewrite this history"
-    );
-
-    let cfg = serde_json::to_vec(&json!({"configure": {
-        "hook": "headroom",
-        "settings": {"target_ratio": 0.4, "min_savings_pct": 100.0},
-        "settings_version": 7,
-        "busbar_version": "1.3.0"
-    }}))
-    .unwrap();
-    let reply = call(&cfg, &knobs);
-    assert_eq!(reply, json!({"ack": {"settings_version": 7}}));
-    assert_eq!(knobs.read().unwrap().target_ratio, 0.4);
-    assert_eq!(knobs.read().unwrap().min_savings_pct, 100.0);
-    // The same connection's NEXT request line sees the pushed settings.
+    let payload = json!({"request": {"pool": "p"}});
+    assert_eq!(transform(&payload, &locked(Knobs::default())), json!({}));
     assert_eq!(
-        call(&req, &knobs),
+        transform(&json!({}), &locked(Knobs::default())),
         json!({}),
-        "min_savings_pct 100 must abstain"
+        "no request key at all (grant absent) must abstain"
     );
 }
 
-/// Configure is DESIRED STATE: a key absent from the push resets to the built-in default —
+/// Garbage in -> abstain, never a panic.
+#[test]
+fn malformed_payload_abstains() {
+    assert_eq!(
+        transform(
+            &json!({"request": "not an object"}),
+            &locked(Knobs::default())
+        ),
+        json!({})
+    );
+    assert_eq!(
+        transform(&json!(null), &locked(Knobs::default())),
+        json!({})
+    );
+}
+
+/// `apply_settings` is DESIRED STATE: a key absent from the push resets to the built-in default —
 /// so an empty map is "back to defaults", and re-pushing the same map is a no-op.
 #[test]
 fn configure_is_desired_state() {
-    let knobs = locked(Knobs {
-        target_ratio: 0.2,
-        min_savings_pct: 90.0,
-        ..Knobs::default()
-    });
-    let cfg =
-        br#"{"configure":{"hook":"headroom","settings":{},"settings_version":3,"busbar_version":"1.3.0"}}"#;
-    assert_eq!(call(cfg, &knobs), json!({"ack": {"settings_version": 3}}));
-    assert_eq!(knobs.read().unwrap().target_ratio, 0.5);
-    assert_eq!(knobs.read().unwrap().min_savings_pct, 10.0);
+    let applied = apply_settings(&serde_json::Map::new()).expect("empty map applies cleanly");
+    assert_eq!(applied.target_ratio, 0.5);
+    assert_eq!(applied.min_savings_pct, 10.0);
 }
 
-/// A configure we can't cleanly apply must NOT ack (busbar then keeps our previous settings and
-/// fails the operator's PATCH): unknown key, wrong type, out-of-range value, missing version.
+/// A settings map we can't cleanly apply must return `Err` (the caller must NOT commit, keeping the
+/// previous live settings): unknown key, wrong type, out-of-range value.
 #[test]
 fn bad_configure_never_acks_and_keeps_settings() {
-    for cfg in [
-        r#"{"configure":{"settings":{"bogus_knob":1},"settings_version":9}}"#,
-        r#"{"configure":{"settings":{"target_ratio":"half"},"settings_version":9}}"#,
-        r#"{"configure":{"settings":{"target_ratio":2.0},"settings_version":9}}"#,
-        r#"{"configure":{"settings":{"min_savings_pct":-1},"settings_version":9}}"#,
-        r#"{"configure":{"settings":{}}}"#, // no settings_version: nothing to echo
-        r#"{"configure":"garbage"}"#,
-    ] {
-        let knobs = locked(Knobs {
-            target_ratio: 0.3,
-            min_savings_pct: 25.0,
-            ..Knobs::default()
-        });
-        let reply = call(cfg.as_bytes(), &knobs);
-        assert!(reply.get("ack").is_none(), "must not ack {cfg}: {reply}");
-        assert_eq!(
-            knobs.read().unwrap().target_ratio,
-            0.3,
-            "settings must survive a rejected configure: {cfg}"
+    let bad_maps = [
+        json!({"bogus_knob": 1}),
+        json!({"target_ratio": "half"}),
+        json!({"target_ratio": 2.0}),
+        json!({"min_savings_pct": -1}),
+    ];
+    for v in bad_maps {
+        let settings = v.as_object().unwrap();
+        assert!(
+            apply_settings(settings).is_err(),
+            "must reject {settings:?}"
         );
     }
 }
 
-/// `describe` returns the `{schema, dashboard}` ENVELOPE (busbar reads `.schema` for the config
-/// form and `.dashboard` for the widget layout); the explicit non-describe shape abstains.
+/// `describe` returns the `{schema, dashboard}` ENVELOPE (the config form + the widget layout, one
+/// declaration driving both).
 #[test]
 fn describe_returns_schema_and_dashboard_envelope() {
-    let knobs = locked(Knobs::default());
-    let reply = call(br#"{"describe":true}"#, &knobs);
+    let reply = describe_reply();
     assert_eq!(reply["schema"]["type"], "object");
     assert!(reply["schema"]["properties"]["target_ratio"].is_object());
     assert!(reply["schema"]["properties"]["price_udollars_per_ktok"].is_object());
-    // the dashboard widget layout is declared alongside the schema (one declaration drives both).
     let widgets = reply["dashboard"]["widgets"].as_array().expect("widgets");
-    assert!(widgets.iter().any(|w| w["metric"] == "headroom_tokens_saved_total"));
-    assert_eq!(call(br#"{"describe":false}"#, &knobs), json!({}));
+    assert!(
+        widgets
+            .iter()
+            .any(|w| w["metric"] == "headroom_tokens_saved_total")
+    );
 }
 
-/// A `status` query returns observed settings + the metrics array using Headroom's REAL `/metrics`
-/// names, types, and units (counters + the `headroom_overhead_ms_*` millisecond summary — no
-/// histograms, matching the running proxy) plus busbar-native per-pool extras (a `pool` label,
-/// estimated $ with a CI). Drives a compressing request first so the counters are non-zero.
+/// `status` returns observed settings + the metrics array using Headroom's REAL `/metrics` names,
+/// types, and units (counters + the `headroom_overhead_ms_*` millisecond summary — no histograms,
+/// matching the running proxy) plus busbar-native per-pool extras (a `pool` label, estimated $ with
+/// a CI). Drives a compressing request first so the counters are non-zero.
 #[test]
 fn status_reports_headroom_named_metrics() {
     let knobs = locked(Knobs {
@@ -213,17 +172,19 @@ fn status_reports_headroom_named_metrics() {
         ..Knobs::default()
     });
     let metrics = Mutex::new(Metrics::default());
-    let req = wire_line(vec![
+    let payload = transform_payload(vec![
         ("user", log_dump(40)),
         ("assistant", log_dump(40)),
         ("user", "why did the deployment fail".to_string()),
     ]);
     assert!(
-        handle_line(&req, &knobs, &metrics).get("rewrite").is_some(),
+        run_transform(&payload, &knobs, &metrics)
+            .get("rewrite")
+            .is_some(),
         "the request must compress so counters advance"
     );
 
-    let status = handle_line(br#"{"status":true}"#, &knobs, &metrics);
+    let status = build_status(&knobs, &metrics);
     assert_eq!(status["status"]["settings"]["target_ratio"], 0.4);
     let m = status["status"]["metrics"]
         .as_array()
@@ -234,19 +195,36 @@ fn status_reports_headroom_named_metrics() {
     let saved = by_name("headroom_tokens_saved_total").expect("headroom_tokens_saved_total");
     assert_eq!(saved["type"], "counter");
     assert!(saved["value"].as_u64().unwrap() > 0);
-    assert_eq!(saved["labels"]["pool"], "p"); // wire_line routes pool "p"
+    assert_eq!(saved["labels"]["pool"], "p"); // transform_payload routes pool "p"
     assert!(by_name("headroom_tokens_input_total").is_some());
-    assert!(by_name("headroom_requests_total").unwrap()["value"].as_u64().unwrap() >= 1);
+    assert!(
+        by_name("headroom_requests_total").unwrap()["value"]
+            .as_u64()
+            .unwrap()
+            >= 1
+    );
 
     // overhead is Headroom's real ms SUMMARY: two counters (_sum,_count) + two gauges (_min,_max).
-    assert_eq!(by_name("headroom_overhead_ms_sum").unwrap()["type"], "counter");
+    assert_eq!(
+        by_name("headroom_overhead_ms_sum").unwrap()["type"],
+        "counter"
+    );
     let cnt = by_name("headroom_overhead_ms_count").expect("overhead count");
     assert_eq!(cnt["type"], "counter");
     assert!(cnt["value"].as_u64().unwrap() >= 1);
-    assert_eq!(by_name("headroom_overhead_ms_min").unwrap()["type"], "gauge");
-    assert_eq!(by_name("headroom_overhead_ms_max").unwrap()["type"], "gauge");
+    assert_eq!(
+        by_name("headroom_overhead_ms_min").unwrap()["type"],
+        "gauge"
+    );
+    assert_eq!(
+        by_name("headroom_overhead_ms_max").unwrap()["type"],
+        "gauge"
+    );
     // No histograms — the real proxy has none.
-    assert!(m.iter().all(|e| e["type"] != "histogram"), "Headroom emits no histograms");
+    assert!(
+        m.iter().all(|e| e["type"] != "histogram"),
+        "Headroom emits no histograms"
+    );
     assert!(by_name("headroom_compression_ratio").is_none());
     assert!(by_name("headroom_latency_seconds").is_none());
 
@@ -261,52 +239,32 @@ fn status_reports_headroom_named_metrics() {
     assert!(lo <= val && val <= hi, "CI must bound the value");
 }
 
-/// A hook that has served nothing still answers `status` cleanly: observed settings + an empty
+/// A gate that has served nothing still answers `status` cleanly: observed settings + an empty
 /// metrics array (busbar renders no series, fail-open).
 #[test]
 fn status_with_no_traffic_is_clean() {
     let knobs = locked(Knobs::default());
-    let status = handle_line(
-        br#"{"status":true}"#,
-        &knobs,
-        &Mutex::new(Metrics::default()),
-    );
+    let status = build_status(&knobs, &Mutex::new(Metrics::default()));
     assert!(status["status"]["metrics"].as_array().unwrap().is_empty());
     assert_eq!(status["status"]["settings"]["min_savings_pct"], 10.0);
 }
 
-/// `encode_reply` enforces busbar's 64 KiB reply-line cap: an in-cap reply passes through
-/// newline-terminated; an over-cap reply degrades to abstain (`{}`) instead of a line busbar
-/// would kill the connection over.
-#[test]
-fn encode_reply_enforces_busbar_reply_cap() {
-    let small = encode_reply(&json!({"ack": {"settings_version": 1}}));
-    assert_eq!(small, b"{\"ack\":{\"settings_version\":1}}\n");
-
-    let huge = json!({"rewrite": {"messages": [{"role": "user", "content": "x".repeat(MAX_REPLY_BYTES)}]}});
-    assert_eq!(
-        encode_reply(&huge),
-        b"{}\n",
-        "an over-cap reply must degrade to abstain"
-    );
-}
-
-/// Latency: compress a realistic multi-KB history and print the wall time (feasibility datum;
-/// run with `cargo test -- --nocapture latency`). Asserts a generous ceiling so CI still gates.
+/// Latency: compress a realistic multi-KB history and print the wall time (feasibility datum; run
+/// with `cargo test -- --nocapture latency`). Asserts a generous ceiling so CI still gates.
 #[test]
 fn latency_multi_kb_prompt() {
-    let line = wire_line(vec![
+    let payload = transform_payload(vec![
         ("user", log_dump(120)),      // ~8 KB
         ("assistant", log_dump(120)), // ~8 KB
         ("user", "why did the deployment fail".to_string()),
     ]);
     let knobs = locked(Knobs::default());
     // Warm once (lazy statics inside headroom), then time.
-    let _ = call(&line, &knobs);
+    let _ = transform(&payload, &knobs);
     let start = std::time::Instant::now();
     let iters = 20;
     for _ in 0..iters {
-        let _ = call(&line, &knobs);
+        let _ = transform(&payload, &knobs);
     }
     let per = start.elapsed() / iters;
     println!("latency: {per:?} per ~16KB history compress");
