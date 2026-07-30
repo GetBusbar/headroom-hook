@@ -2,6 +2,19 @@
 # tagged with the pushed vX.Y.Z tag and `latest`. Binaries are built on
 # NATIVE runners (no QEMU) then copied into a small distroless/cc image.
 #
+# DEPRECATED / CURRENTLY BROKEN: this workflow builds `target/<triple>/release/headroom-hook`,
+# a binary that no longer exists — since "Port headroom-hook to busbar's signed dlopen plugin
+# ABI" (commit c37b798) this crate is `crate-type = ["cdylib", "rlib"]` only (no `[[bin]]`, no
+# `fn main`). `cargo build --release` here builds fine (the lib target), but there is no
+# `headroom-hook` executable to `file`/upload/COPY into the Dockerfile — this workflow would
+# fail partway through if it ran. The automatic `push: tags: v*` trigger has been REMOVED (see
+# below) so it stops firing (and failing) on every release tag; `workflow_dispatch` is kept only
+# because .github/workflows/headroom-release-watch.yml calls `gh workflow run docker.yml` by
+# name after a version bump — removing workflow_dispatch entirely would break that call, not
+# just this workflow. Use getbusbar/busbar-headroom (.github/workflows/docker-bundle.yml)
+# instead — see README.md's "Two ways to run" section. Fixing or retiring this file for good is
+# a product call for a human, not made unilaterally here.
+#
 # NOTE (see Dockerfile): on Linux, headroom-core's default tree links the ONNX
 # runtime at build time. The FIRST run of this workflow is the validation point
 # for the runtime linkage — if the binary needs libonnxruntime.so at run time,
@@ -11,8 +24,6 @@
 name: docker
 
 on:
-  push:
-    tags: ["v*"]
   workflow_dispatch: {}
 
 env:

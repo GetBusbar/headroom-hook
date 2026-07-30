@@ -77,68 +77,94 @@ Reproduce every number: see [`bench/README.md`](bench/README.md).
 
 ## Install and run
 
-The hook is a small binary you run alongside busbar; busbar connects to it over
-a Unix socket. You own its lifecycle — busbar never spawns it; it lazy-connects and
-reconnects across restarts, so start order doesn't matter.
+Headroom is a **busbar plugin**: a signed cdylib busbar `dlopen`s in-process (busbar's
+plugin ABI). There is no standalone binary and no socket to wire up — busbar loads the
+library directly and calls it as an in-process rewrite gate. Two ways to get it
+running:
 
-### Docker (recommended): `docker compose up`
+### 1. Bundled image (simplest — one container, zero config)
 
-Two tiny images, one shared socket — copy, paste, running:
-
-```sh
-curl -fsSL -O https://raw.githubusercontent.com/GetBusbar/headroom-hook/main/docker-compose.yml
-curl -fsSL -o config.yaml https://raw.githubusercontent.com/GetBusbar/headroom-hook/main/config.example.yaml
-export ANTHROPIC_KEY=sk-ant-...   # or edit config.yaml for your provider
-docker compose up
-```
-
-busbar (`:8080`) and the compression hook come up together and Headroom is on
-every request. The [starter config](config.example.yaml) registers the hook
-globally over one Anthropic pool — edit it for your own pools/providers. The
-images are `getbusbar/headroom-hook` and `getbusbar/busbar`.
-
-### Prebuilt binary
-
-Grab it from the [latest release](https://github.com/GetBusbar/headroom-hook/releases/latest):
+If you came to busbar specifically to run Headroom and just want it working, this is
+the path: busbar + Headroom in one container, pre-installed and pre-wired.
 
 ```sh
-# Linux x86_64
-curl -fsSL -o headroom-hook https://github.com/GetBusbar/headroom-hook/releases/latest/download/headroom-hook-linux-x86_64
-# Linux arm64
-curl -fsSL -o headroom-hook https://github.com/GetBusbar/headroom-hook/releases/latest/download/headroom-hook-linux-aarch64
-# macOS (Apple Silicon)
-curl -fsSL -o headroom-hook https://github.com/GetBusbar/headroom-hook/releases/latest/download/headroom-hook-macos-arm64
-chmod +x headroom-hook
+docker run -d -p 8080:8080 \
+  -e ANTHROPIC_KEY -e BUSBAR_ADMIN_TOKEN \
+  getbusbar/busbar-headroom
 ```
 
-Each release ships a `SHA256SUMS`; verify with `sha256sum -c SHA256SUMS`. Then run it on a socket:
+Every request through the default pool is compressed immediately — no plugin install
+step. See [`docker/bundle/config.yaml`](docker/bundle/config.yaml) for the baked-in
+default config (one Anthropic provider, one pool, Headroom wired as a global
+`prompt: rw` gate) and [`docker/bundle/Dockerfile`](docker/bundle/Dockerfile) for how
+the image is built — busbar compiled from source with the same PGO release build
+busbar's own official image uses, Headroom's cdylib built and signed alongside it in
+the same CI run. Mount your own `config.yaml` over `/etc/busbar/config.yaml` to
+replace the default entirely; copy the `plugins:`/`pools.*.hooks` blocks from the
+baked-in default into yours to keep Headroom wired. Published by
+[`.github/workflows/docker-bundle.yml`](.github/workflows/docker-bundle.yml).
 
-```sh
-HEADROOM_SOCKET=/tmp/headroom.sock ./headroom-hook
-```
+This image is distinct from `getbusbar/busbar` (busbarAI's own plugin-free image) and
+supersedes the old `getbusbar/headroom-hook` standalone image described later in this
+repo's history (that image predates busbar's dlopen plugin ABI and is no longer
+buildable — see the root `Dockerfile`'s header).
+
+### 2. Plugin drop-in (if you already run busbar)
+
+If you already have a busbar deployment — [`getbusbar/busbar`](https://github.com/GetBusbar/busbar)
+or your own build — install Headroom into it the same way you'd install any other
+first-party plugin:
+
+1. Grab the signed tarball for your platform from this repo's
+   [Releases](https://github.com/GetBusbar/headroom-hook/releases)
+   (`busbar-headroom-<arch>.tar.gz`).
+2. Drop it into busbar's plugin directory and enable plugins in your `config.yaml`:
+
+   ```yaml
+   plugins:
+     enabled: true
+     dir: /etc/busbar/plugins   # or wherever you dropped the tarball
+   ```
+3. Wire it in as a hook wherever you want compression — globally or per-pool:
+
+   ```yaml
+   pools:
+     default:
+       hooks:
+         - { module: busbar-headroom, kind: gate, prompt: rw, timeout_ms: 50 }
+       members:
+         - model: claude
+   ```
+
+Because the tarball is signed with busbar's release key, it loads as first-party with
+zero extra trust configuration (`plugins.trust.allow_unsigned` is only needed for
+unsigned/dev builds).
 
 ### Build from source
 
-Needs a Rust toolchain ([rustup](https://rustup.rs)); the pinned `headroom-core` rev is in `Cargo.toml`.
+Needs a Rust toolchain ([rustup](https://rustup.rs)); the pinned `headroom-core` rev is
+in `Cargo.toml`. This builds the cdylib only (`crate-type = ["cdylib", "rlib"]` — there
+is no `[[bin]]`, no standalone executable), which you then sign/pack with busbar's own
+`busbar-plugin-pack` tool before busbar will load it as first-party (or load it
+unsigned in dev mode via `plugins.trust.allow_unsigned`):
 
 ```sh
 git clone https://github.com/GetBusbar/headroom-hook && cd headroom-hook
-cargo build --release      # binary: target/release/headroom-hook
+cargo build --release      # cdylib: target/release/libheadroom_hook.so (.dylib on macOS)
 ```
 
 ### Settings
 
-`HEADROOM_TARGET_RATIO` (default 0.5, the fraction of tokens to keep),
-`HEADROOM_MIN_SAVINGS_PCT` (default 10, abstain below this saving), and
-`HEADROOM_PRICE_UDOLLARS_PER_KTOK` (default 2500, the $-estimate price) SEED the
-startup values — once busbar pushes settings over the wire, the push wins. Point
-busbar at the socket (see the config block below) or register the hook live over
-the admin API. That's it.
+`target_ratio` (default 0.5, the fraction of tokens to keep), `min_savings_pct`
+(default 10, abstain below this saving), and `price_udollars_per_ktok` (default 2500,
+the $-estimate price) seed the startup values, then live-update as busbar pushes
+settings — retune without a restart over the admin API's hook-settings endpoint. See
+[Metrics](#metrics) below for the matching status/metrics surface.
 
-**OS support.** The hook speaks a Unix socket, so it runs on Linux and macOS
-(any arch). There is no native Windows build and no HTTP mode — on Windows, run
-busbar and the hook together inside WSL2 or a Linux container, where the socket
-works normally.
+**OS support.** As a dlopen'd cdylib, Headroom runs wherever busbar itself runs and
+can load a `.so`/`.dylib` built for the target platform — no native Windows build yet
+(build and load inside WSL2 or a Linux container on Windows, same as any other
+first-party hook plugin).
 
 ## The wire (busbar's 5-message hook protocol)
 
@@ -152,6 +178,13 @@ dispatched by the top-level key:
 | `status` | busbar → hook, any time | `{status:{settings, metrics:[…]}}` — observed settings + self-reported metrics (see [Metrics](#metrics)) |
 | decide / transform | busbar → hook, per request | `{"rewrite":{...}}` or `{}` (abstain) |
 | notify | busbar → hook, fire-and-forget (taps only) | none read |
+
+> **Note:** this table describes the message *shape* busbar's hook contract still
+> speaks conceptually (configure/describe/status/transform/notify); the *transport* it
+> travels over changed from the Unix-socket wire below to an in-process dlopen call
+> (`HookHandler` trait methods) when this hook was ported to busbar's signed plugin ABI
+> — see [Install and run](#install-and-run) above. The settings PATCH example and
+> config block further down are current; the raw socket framing is historical.
 
 Settings (`target_ratio`, `min_savings_pct`, `price_udollars_per_ktok`)
 arrive as desired state: a key absent from the push resets to its default, a
@@ -184,18 +217,20 @@ series carries a `pool` label, so one process serving N pools shows N rows.
 
 ## Wire into busbar (fleet-wide)
 
+Current config shape (`kind: hook` dlopen plugin, not the retired `socket:` gate — see
+[Install and run](#install-and-run) above for the full drop-in steps):
+
 ```yaml
-hooks:
-  headroom:
-    kind: gate
-    socket: /tmp/headroom.sock
-    prompt: rw           # the rewrite grant
-    global: true         # fire on every request
-    timeout_ms: 25       # ~550 µs typical; 25 ms is generous headroom
-    on_error: nothing    # a broken compressor never touches a request
-    settings:            # pushed to the hook as the first line of every connection
-      target_ratio: 0.5
-      min_savings_pct: 10
+plugins:
+  enabled: true
+  dir: /etc/busbar/plugins   # where you dropped busbar-headroom-<arch>.tar.gz
+
+pools:
+  default:
+    hooks:
+      - { module: busbar-headroom, kind: gate, prompt: rw, timeout_ms: 50 }
+    members:
+      - model: claude
 ```
 
 ## A/B test it (same binary, two pools)

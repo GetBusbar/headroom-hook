@@ -1,12 +1,22 @@
 # Build the headroom-hook binary for each supported platform and publish them as
 # assets on a GitHub Release, so users can `curl` a prebuilt binary instead of
 # building from source. Triggered by pushing a tag like `headroom-v1.0.0`.
+#
+# DEPRECATED / CURRENTLY BROKEN: this workflow's `cargo build --release --locked --target ...`
+# step expects a `target/<triple>/release/headroom-hook` EXECUTABLE to stage and upload. Since
+# "Port headroom-hook to busbar's signed dlopen plugin ABI" (commit c37b798) this crate is
+# `crate-type = ["cdylib", "rlib"]` only — there is no `[[bin]]`, no `fn main`, and so no such
+# binary is ever produced; the "Stage binary" step would fail. The automatic `push: tags: v*`
+# trigger has been REMOVED so this stops firing (and failing) on every release tag;
+# `workflow_dispatch` is kept only because
+# .github/workflows/headroom-release-watch.yml calls `gh workflow run release.yml` by name after
+# a version bump. There is no equivalent "signed plugin tarball to GitHub Releases" workflow
+# checked into this branch as of this writing — if one was set up elsewhere this session, it has
+# not landed on `dev`. Fixing or retiring this file for good is a product call for a human, not
+# made unilaterally here.
 name: release-headroom
 
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch: {}   # allow a manual run (builds, uploads to a draft/no release)
 
 permissions:
