@@ -43,9 +43,9 @@ permissions:
 env:
   # Which busbar branch to check out as the sibling path dependency — same BUSBAR_REF convention
   # every other first-party plugin's ci.yml/release.yml already established. Update to `main` once
-  # busbar 1.5.0 actually ships; until then the plugin ABI surface this crate depends on only
-  # exists on 1.5.0-dev.
-  BUSBAR_REF: 1.5.0-dev
+  # busbar 1.5.0 actually ships; until then the plugin ABI surface this crate depends on lives on
+  # `dev` (the actively-developed 1.5.0 line — NOT the older, now-stale `1.5.0-dev` branch).
+  BUSBAR_REF: dev
 
 jobs:
   # Create the Release first so the parallel per-target upload jobs have something to attach to
