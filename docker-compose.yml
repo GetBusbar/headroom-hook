@@ -1,3 +1,10 @@
+# STALE since "Port headroom-hook to busbar's signed dlopen plugin ABI" (commit c37b798): this
+# composes two containers over a shared Unix-socket volume, but the hook is no longer a standalone
+# process — it's a cdylib busbar `dlopen`s in-process (`plugins.dir` + `global_hooks:` in a single
+# busbar config; see README.md "Install and run"). `getbusbar/headroom-hook` is not currently
+# published/buildable (see Dockerfile). Not deleted outright — a bundled single-image setup may
+# replace this; that's a product call, not made unilaterally here.
+#
 # busbar + headroom-hook, composed — the "just works" setup.
 #
 #   docker compose up

@@ -1,6 +1,6 @@
 [package]
 name = "headroom-hook"
-version = "1.0.14"
+version = "2.0.0"
 edition = "2024"
 publish = false
 description = "busbar first-party kind:hook plugin (dlopen cdylib): compresses LLM chat history with the real headroom-core BM25 TextCrusher engine as a prompt:rw rewrite gate."
@@ -17,15 +17,16 @@ crate-type = ["cdylib", "rlib"]
 # to the upstream merge commit — the fork is retired. The gate is not in a release yet (latest is
 # v0.31.0, pre-merge); the docker CI (see .github/workflows/headroom-release-watch.yml) re-pins to
 # the first upstream RELEASE tag that contains the gate and rebuilds. The pin protects builds.
-headroom-core = { git = "https://github.com/headroomlabs-ai/headroom", tag = "v0.32.0", default-features = false }
+headroom-core = { git = "https://github.com/headroomlabs-ai/headroom", tag = "v0.33.0", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# INTERIM: busbarAI is not yet public, so this is a local path dependency. Once busbarAI ships
-# publicly this MUST become a git or crates.io dependency — this path dep is a deliberate stopgap,
-# not a design decision.
-busbar-plugin-sdk = { path = "/Users/matthew/Developer/busbarAI/busbarAI/crates/plugin-sdk" }
+# INTERIM: busbarAI isn't public yet, so this is a local path dependency into a sibling checkout of
+# the monorepo. Once busbarAI ships publicly this should become a git (pinned rev/tag) or crates.io
+# dependency instead — same relative-path convention webrequest-hook's busbar-plugin-sdk dependency
+# already uses.
+busbar-plugin-sdk = { path = "../busbarAI/crates/plugin-sdk" }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "macros"] }
-busbar-plugin-loader = { path = "/Users/matthew/Developer/busbarAI/busbarAI/crates/plugin-loader" }
-busbar-api = { path = "/Users/matthew/Developer/busbarAI/busbarAI/crates/api" }
+busbar-plugin-loader = { path = "../busbarAI/crates/plugin-loader" }
+busbar-api = { path = "../busbarAI/crates/api" }

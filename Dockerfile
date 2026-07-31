@@ -1,3 +1,12 @@
+# STALE since "Port headroom-hook to busbar's signed dlopen plugin ABI" (commit c37b798): this
+# builds a standalone `headroom-hook` binary for the RETIRED Unix-socket transport. The crate has
+# been `crate-type = ["cdylib", "rlib"]` only since that port (no `[[bin]]`, no `fn main`), so this
+# image is not currently buildable as written. `.github/workflows/docker.yml`'s automatic tag
+# trigger has been disabled for the same reason — see that file's header. `release.yml` is the real
+# release path now (a signed plugin tarball you drop into an existing busbar's `plugins.dir`; see
+# README.md "Install and run"). Not deleted outright — reviving this as a bundled
+# busbar+headroom image is a product call, not made unilaterally here.
+#
 # headroom-hook container image.
 #
 # Unlike busbar (a static musl binary on FROM scratch), this hook links a C++

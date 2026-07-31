@@ -1,7 +1,9 @@
-# Baseline: busbar alone, no hook. Server-Timing on so the driver reads busbar;dur.
+# Baseline: busbar alone, no Headroom plugin loaded at all (plugins block omitted). Server-Timing
+# is on so the driver reads busbar;dur. Compare against config.hook.yaml, which is IDENTICAL to
+# this file plus the `plugins:` block and the `global_hooks:` entry that wires Headroom in.
 listen: "0.0.0.0:8080"
-auth: { chain: [tokens], client_tokens: ["bench-token"] }
-providers: { mock: { api_key_env: BENCH_MOCK_KEY } }
-models: { bench-model: { provider: mock, max_concurrent: 256, max_requests: -1 } }
-pools: { bench-pool: { members: [ { target: bench-model } ] } }
+auth: { chain: [] }
+providers: { mock: { api_key: { env: BENCH_MOCK_KEY } } }
+models: { bench-model: { provider: mock, max_concurrent: 256 } }
+pools: { bench-pool: { members: [ { model: bench-model } ] } }
 observability: { emit_server_timing: true }
