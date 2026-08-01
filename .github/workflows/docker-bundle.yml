@@ -83,7 +83,11 @@ jobs:
       - name: Checkout busbarAI (sibling — source of the busbar binary)
         uses: actions/checkout@v4
         with:
-          repository: GetBusbar/busbarAI
+          # NOT "GetBusbar/busbarAI" — that repo does not exist (confirmed via `gh repo list
+          # GetBusbar`; every other workflow in this repo, e.g. release.yml and
+          # headroom-release-watch.yml, already correctly uses GetBusbar/busbar). As authored this
+          # checkout 404'd, so this job could never get past its second step.
+          repository: GetBusbar/busbar
           ref: ${{ env.BUSBARAI_REF }}
           path: busbarAI
 

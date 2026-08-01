@@ -1,0 +1,32 @@
+# Calls the canonical plugin-ci reusable workflow (GetBusbar/busbar/.github/workflows/plugin-ci.yml)
+# instead of hand-copying build/test/signoff steps here — see that file for what actually runs, and
+# see webrequest-hook's / auth-oidc's own ci.yml for the sibling-repo convention this mirrors.
+#
+# Before this file existed, headroom-hook had NO pull_request- or push-triggered CI at all: only
+# release.yml (fires on a `v*` tag, builds + packs + publishes with no test step in between) and
+# docker.yml/docker-bundle.yml (tag-triggered or workflow_dispatch, no test step either). A broken
+# build could reach a real GitHub Release — the only gate was a human running `cargo test` locally
+# before merging (see 39af7ac's commit message, which says exactly this out loud). This closes that
+# gap the same way every other first-party plugin repo already does.
+#
+# busbar_ref is set explicitly to `dev`, NOT left at the reusable workflow's own default
+# (`1.5.0-dev`): this repo's own release.yml/headroom-release-watch.yml env blocks already document
+# that `1.5.0-dev` is the older, now-stale branch and the plugin ABI surface this crate depends on
+# lives on `dev` (the actively-developed 1.5.0 line) — same BUSBAR_REF convention, applied here too.
+name: ci
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+jobs:
+  ci:
+    uses: GetBusbar/busbar/.github/workflows/plugin-ci.yml@dev
+    with:
+      plugin_crate: headroom-hook
+      plugin_kind: hook
+      plugin_alias: headroom
+      service: none
+      busbar_ref: dev

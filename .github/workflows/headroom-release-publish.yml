@@ -1,5 +1,5 @@
 # Fires when a dev -> main PR opened by headroom-release-watch.yml is actually merged. Tags the
-# resulting main commit and republishes docker.yml + release.yml against that tag.
+# resulting main commit and republishes docker-bundle.yml + release.yml against that tag.
 #
 # Split out of headroom-release-watch.yml on purpose: that workflow only ever touches `dev` (see
 # its own header for why — GITHUB_TOKEN can't push straight to protected main). Cutting a real
@@ -15,7 +15,7 @@ on:
 
 permissions:
   contents: write # push the tag
-  actions: write # `gh workflow run` docker.yml/release.yml
+  actions: write # `gh workflow run` docker-bundle.yml/release.yml
 
 jobs:
   publish:
@@ -42,9 +42,20 @@ jobs:
           git push origin "$tag"
           # A tag pushed with the built-in GITHUB_TOKEN does NOT trigger the `on: push: tags: v*`
           # workflows (GitHub's recursion guard). workflow_dispatch is the documented EXCEPTION —
-          # GITHUB_TOKEN CAN trigger it — so kick docker.yml + release.yml explicitly against the new
-          # tag ref. Both derive their version from GITHUB_REF_NAME, so `--ref` yields the identical
-          # X.Y.Z + latest image tags a native tag-push would (no PAT/secret needed).
-          gh workflow run docker.yml  --ref "$tag"
-          gh workflow run release.yml --ref "$tag"
+          # GITHUB_TOKEN CAN trigger it — so kick docker-bundle.yml + release.yml explicitly against
+          # the new tag ref (both also declare `push: tags: v*`, so this is what actually fires them
+          # for a bot-pushed tag). Both derive their version from GITHUB_REF_NAME/the `version` input,
+          # so `--ref` yields the identical X.Y.Z + latest image tags a native tag-push would (no
+          # PAT/secret needed).
+          #
+          # NOT docker.yml: that workflow builds a `headroom-hook` standalone binary the crate hasn't
+          # produced since it became a dlopen-only cdylib (see docker.yml's own header) — dispatching
+          # it here would guarantee a failing run on every real release for a deprecated image nobody
+          # ships anymore. docker-bundle.yml (getbusbar/busbar-headroom) is the actual current "one
+          # container" release path — see README.md's "Two ways to run" — and until this fix it was
+          # never triggered by this workflow at all (its own `push: tags:` trigger can't fire either,
+          # for the same GITHUB_TOKEN recursion-guard reason release.yml needs the explicit dispatch
+          # below), so bundle images silently stopped publishing on every release.
+          gh workflow run docker-bundle.yml --ref "$tag" -f version="$new"
+          gh workflow run release.yml       --ref "$tag"
           echo "::notice::tagged and republished headroom-hook $tag"

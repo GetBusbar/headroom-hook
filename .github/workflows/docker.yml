@@ -19,12 +19,14 @@
 # `fn main`). `cargo build --release` here builds fine (the lib target), but there is no
 # `headroom-hook` executable to `file`/upload/COPY into the Dockerfile — this workflow would
 # fail partway through if it ran. The automatic `push: tags: v*` trigger has been REMOVED (see
-# below) so it stops firing (and failing) on every release tag; `workflow_dispatch` is kept only
-# because .github/workflows/headroom-release-watch.yml calls `gh workflow run docker.yml` by
-# name after a version bump — removing workflow_dispatch entirely would break that call, not
-# just this workflow. Use getbusbar/busbar-headroom (.github/workflows/docker-bundle.yml)
-# instead — see README.md's "Two ways to run" section. Fixing or retiring this file for good is
-# a product call for a human, not made unilaterally here.
+# below) so it stops firing (and failing) on every release tag; `workflow_dispatch` is kept as a
+# manual-only escape hatch, not deleted outright. NOTHING calls this automatically anymore:
+# headroom-release-publish.yml used to `gh workflow run docker.yml` after every merge to main
+# (dispatching a guaranteed-failing run on every real release, since this workflow was already
+# broken) — that call was retargeted to docker-bundle.yml instead, the actual current release
+# path. Use getbusbar/busbar-headroom (.github/workflows/docker-bundle.yml) instead — see
+# README.md's "Two ways to run" section. Fixing or retiring this file for good is a product call
+# for a human, not made unilaterally here.
 #
 # NOTE (see Dockerfile): on Linux, headroom-core's default tree links the ONNX
 # runtime at build time. The FIRST run of this workflow is the validation point
