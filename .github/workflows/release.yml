@@ -1,99 +1,181 @@
-# Build the headroom-hook binary for each supported platform and publish them as
-# assets on a GitHub Release, so users can `curl` a prebuilt binary instead of
-# building from source. Triggered by pushing a tag like `headroom-v1.0.0`.
+# Release: on a version tag (e.g. v1.0.0), build the headroom-hook plugin cdylib for all 5
+# supported targets, pack + sign each into a loadable busbar plugin tarball, and publish them to
+# THIS repo's own GitHub Release.
 #
-# DEPRECATED / CURRENTLY BROKEN: this workflow's `cargo build --release --locked --target ...`
-# step expects a `target/<triple>/release/headroom-hook` EXECUTABLE to stage and upload. Since
-# "Port headroom-hook to busbar's signed dlopen plugin ABI" (commit c37b798) this crate is
-# `crate-type = ["cdylib", "rlib"]` only — there is no `[[bin]]`, no `fn main`, and so no such
-# binary is ever produced; the "Stage binary" step would fail. The automatic `push: tags: v*`
-# trigger has been REMOVED so this stops firing (and failing) on every release tag;
-# `workflow_dispatch` is kept only because
-# .github/workflows/headroom-release-watch.yml calls `gh workflow run release.yml` by name after
-# a version bump. There is no equivalent "signed plugin tarball to GitHub Releases" workflow
-# checked into this branch as of this writing — if one was set up elsewhere this session, it has
-# not landed on `dev`. Fixing or retiring this file for good is a product call for a human, not
-# made unilaterally here.
-name: release-headroom
+# This mirrors busbarAI/.github/workflows/release.yml's `auth-plugins` job (and the identical
+# pattern GetBusbar/auth-oidc and GetBusbar/webrequest-hook use) — same 5-target matrix, same
+# busbar-plugin-pack pack/sign step (built from a sibling busbar checkout), same
+# BUSBAR_SIGN_KEY-or-`--allow-unsigned` fallback, same `gh release upload` + build-provenance
+# attestation — just scoped to this one plugin.
+#
+# REPLACES the old `release-headroom` workflow, which built a standalone binary for the
+# RETIRED Unix-socket transport (`headroom-hook` executable, triggered by a `headroom-v*` tag).
+# Since "Port headroom-hook to busbar's signed dlopen plugin ABI" (commit c37b798) this crate is
+# `crate-type = ["cdylib", "rlib"]` only — no `[[bin]]`, no `fn main` — so that old workflow can no
+# longer build anything. This workflow builds the cdylib instead, packed the same way every other
+# first-party plugin's Release tarball is.
+#
+# No musl / FROM-scratch complexity here on purpose: that trickery (musl-native `rust:alpine`
+# container, crt-static disabled, runtime libs extracted) is specific to the SEPARATE
+# getbusbar/busbar-headroom bundled Docker image (.github/workflows/docker-bundle.yml, FROM
+# scratch => no libc at all in the runtime image, so the cdylib's dynamic-link dependencies must
+# be hand-carried in). A plain tarball release is not going into a from-scratch image — it loads
+# into a normal glibc/libc++ busbar process on the end user's machine — so it uses the exact same
+# standard 5-target matrix (glibc Linux, not musl) every other plugin's release.yml uses, with no
+# special linking steps.
+#
+# This plugin's own version (the `v*` tag pushed here) is NOT tied to busbar's version number —
+# see other first-party plugin repos for the same convention.
+name: release
 
 on:
-  workflow_dispatch: {}   # allow a manual run (builds, uploads to a draft/no release)
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch: {}   # kept: headroom-release-watch.yml invokes this workflow by name after a
+                           # dependency-bump tag push (GITHUB_TOKEN-pushed tags don't self-trigger).
 
 permissions:
-  contents: write   # create the release + upload assets
+  contents: write      # create the Release + upload assets
+  id-token: write      # OIDC identity for keyless Sigstore signing (provenance)
+  attestations: write  # record the build-provenance attestation
+
+env:
+  # Which busbar branch to check out as the sibling path dependency — same BUSBAR_REF convention
+  # every other first-party plugin's ci.yml/release.yml already established. Update to `main` once
+  # busbar 1.5.0 actually ships; until then the plugin ABI surface this crate depends on lives on
+  # `dev` (the actively-developed 1.5.0 line — NOT the older, now-stale `1.5.0-dev` branch).
+  BUSBAR_REF: dev
 
 jobs:
-  build:
-    name: build ${{ matrix.target }}
+  # Create the Release first so the parallel per-target upload jobs have something to attach to
+  # (uploading from a matrix without a pre-existing release races -> "release not found").
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Create GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "busbar-headroom ${GITHUB_REF_NAME}" \
+            --verify-tag --generate-notes \
+          || gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}"
+
+  # One signed .tar.gz per target: {cdylib + manifest.json}, packed by busbar-plugin-pack and
+  # signed with the busbar release PRIVATE key (BUSBAR_SIGN_KEY secret) so it verifies as
+  # first-party against the PUBLIC key embedded in busbar's own release binaries. If that secret
+  # isn't provisioned on this repo, falls back to an UNSIGNED tarball (loadable only under
+  # plugins.trust.allow_unsigned) rather than blocking the release — same seam every other
+  # first-party plugin's release.yml documents.
+  headroom-plugin:
+    needs: create-release
+    name: headroom-plugin (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            asset: headroom-hook-linux-x86_64
-          - os: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
-            asset: headroom-hook-linux-aarch64
-          - os: macos-14
-            target: aarch64-apple-darwin
-            asset: headroom-hook-macos-arm64
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            libext: so
+            libprefix: lib
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+            libext: so
+            libprefix: lib
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            libext: dylib
+            libprefix: lib
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            libext: dylib
+            libprefix: lib
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            libext: dll
+            libprefix: ""
     steps:
-      - uses: actions/checkout@v4
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Checkout headroom-hook
+        uses: actions/checkout@v7
+        with:
+          path: headroom-hook
+
+      - name: Checkout busbar (sibling path dependency)
+        uses: actions/checkout@v7
+        with:
+          repository: GetBusbar/busbar
+          ref: ${{ env.BUSBAR_REF }}
+          path: busbarAI
+
+      # headroom-hook's Cargo.toml currently declares busbar-plugin-sdk as an ABSOLUTE local path
+      # (/Users/matthew/Developer/busbarAI/busbarAI/crates/...) — a stopgap the crate's own
+      # Cargo.toml documents, pending busbarAI going public. Patch it to the sibling-relative path
+      # this job's checkout layout actually produces (same patch
+      # .github/workflows/docker-bundle.yml already carries for the same reason).
+      - name: Patch headroom-hook's interim path dependencies for CI
+        shell: bash
+        run: |
+          set -euo pipefail
+          sed -i.bak 's#/Users/matthew/Developer/busbarAI/busbarAI/crates#../busbarAI/crates#g' headroom-hook/Cargo.toml
+          rm -f headroom-hook/Cargo.toml.bak
+          grep 'path = "\.\./busbarAI' headroom-hook/Cargo.toml
+
+      - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-      - name: Build (release)
-        run: cargo build --release --locked --target ${{ matrix.target }}
-      - name: Stage binary
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build the headroom-hook plugin cdylib
+        working-directory: headroom-hook
+        run: cargo build --release --lib --target ${{ matrix.target }}
+        shell: bash
+
+      - name: Build busbar-plugin-pack (from the sibling busbar checkout)
+        working-directory: busbarAI
+        run: cargo build --release --target ${{ matrix.target }} -p busbar-plugin-pack
+        shell: bash
+
+      - name: Package + sign the plugin tarball
+        env:
+          BUSBAR_SIGN_KEY: ${{ secrets.BUSBAR_SIGN_KEY }}
         run: |
-          install -m 0755 "target/${{ matrix.target }}/release/headroom-hook" "${{ matrix.asset }}"
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+          set -euo pipefail
+          ver="${GITHUB_REF_NAME#v}"
+          target="${{ matrix.target }}"
+          outdir="plugin-dist"; mkdir -p "$outdir"
+          pack="busbarAI/target/${target}/release/busbar-plugin-pack"
+          [ -x "$pack" ] || pack="busbarAI/target/${target}/release/busbar-plugin-pack.exe"
+          unsigned_flag=""
+          if [ -z "${BUSBAR_SIGN_KEY:-}" ]; then
+            echo "::warning::BUSBAR_SIGN_KEY secret is not provisioned — packaging an UNSIGNED plugin tarball (loadable only under plugins.trust.allow_unsigned). See busbarAI's release.yml TODO(release-keys) seam."
+            unsigned_flag="--allow-unsigned"
+          fi
+          lib="headroom-hook/target/${target}/release/${{ matrix.libprefix }}headroom_hook.${{ matrix.libext }}"
+          "$pack" pack \
+            --lib "$lib" \
+            --name "busbar-headroom" --alias "headroom" --kind hook \
+            --version "$ver" --publisher busbar \
+            --description "Compresses LLM chat history with the real headroom-core BM25 TextCrusher engine as a prompt:rw rewrite gate — a busbar first-party kind:hook plugin (dlopen cdylib)." \
+            --license Apache-2.0 \
+            --needs-prompt rw \
+            --out "${outdir}/busbar-headroom-${ver}-${target}.tar.gz" \
+            $unsigned_flag
+          ls -l "$outdir"
+        shell: bash
+
+      - name: Attach plugin tarball to Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${GITHUB_REF_NAME}" plugin-dist/*.tar.gz --repo "${GITHUB_REPOSITORY}" --clobber
+        shell: bash
+
+      # Keyless (Sigstore/OIDC) build-provenance attestation binding this tarball's digest to this
+      # workflow run + commit — `gh attestation verify <tarball> --repo ${{ github.repository }}`.
+      - name: Attest plugin build provenance
+        uses: actions/attest-build-provenance@v4
         with:
-          name: ${{ matrix.asset }}
-          path: ${{ matrix.asset }}
-          if-no-files-found: error
-
-  release:
-    name: publish release
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download all binaries
-        uses: actions/download-artifact@v4
-        with:
-          path: dist
-          merge-multiple: true
-      - name: Checksums
-        run: |
-          cd dist
-          sha256sum headroom-hook-* > SHA256SUMS
-          cat SHA256SUMS
-      - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            dist/headroom-hook-*
-            dist/SHA256SUMS
-          body: |
-            Prebuilt `headroom-hook` binaries for busbar's context-compression gate.
-
-            Grab the one for your platform and run it (it owns a Unix socket; busbar connects to it):
-
-            ```sh
-            # Linux x86_64 example — swap the asset name for your platform:
-            curl -fsSL -o headroom-hook \
-              https://github.com/GetBusbar/headroom-hook/releases/download/${{ github.ref_name }}/headroom-hook-linux-x86_64
-            chmod +x headroom-hook
-            HEADROOM_SOCKET=/tmp/headroom.sock ./headroom-hook
-            ```
-
-            Verify with `sha256sum -c SHA256SUMS`. Assets:
-            `headroom-hook-linux-x86_64`, `headroom-hook-linux-aarch64`,
-            `headroom-hook-macos-arm64`.
-
-            (Intel macOS: build from source — see the README. Apple Silicon is prebuilt.)
+          subject-path: "plugin-dist/*.tar.gz"

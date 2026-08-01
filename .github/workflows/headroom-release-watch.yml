@@ -23,18 +23,40 @@ permissions:
 env:
   UPSTREAM: headroomlabs-ai/headroom
   FLOOR: v0.31.0
+  # Same BUSBAR_REF convention ci.yml/release.yml use for the sibling path dependency this crate
+  # needs (busbar-plugin-sdk) — see the sibling-checkout step below for why it's required at all.
+  BUSBAR_REF: dev
 
 jobs:
   watch:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # headroom-hook's Cargo.toml declares busbar-plugin-sdk as `path = "../busbarAI/crates/..."`
+      # — a real sibling-relative path (see the `a61e7f8` fix), which means whatever checks this
+      # repo out MUST also check out a real `busbarAI` as an actual filesystem sibling. This job
+      # was checking out ONLY headroom-hook at the workspace root with no sibling at all — `../busbarAI`
+      # resolved to nothing, so `cargo build`/`cargo test` below failed immediately on every real
+      # (bump=yes) run. Fix: check both repos out into explicit sibling paths under the workspace,
+      # matching release.yml's own layout, and run every later step with
+      # `working-directory: headroom-hook` instead of the (implicit) workspace root.
+      - name: Checkout headroom-hook
+        uses: actions/checkout@v4
         with:
+          path: headroom-hook
           fetch-depth: 0
+
+      - name: Checkout busbar (sibling path dependency)
+        uses: actions/checkout@v4
+        with:
+          repository: GetBusbar/busbar
+          ref: ${{ env.BUSBAR_REF }}
+          path: busbarAI
+
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Resolve latest upstream release + current pin
         id: resolve
+        working-directory: headroom-hook
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -54,6 +76,7 @@ jobs:
 
       - name: Bump pin, build + test (lexical/no-ml), publish on green
         if: steps.resolve.outputs.bump == 'yes'
+        working-directory: headroom-hook
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           LATEST: ${{ steps.resolve.outputs.latest }}

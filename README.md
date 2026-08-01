@@ -1,10 +1,12 @@
 # headroom-hook
 
-**v1.** Compresses LLM chat history inside [busbar](https://getbusbar.com)
+**v2.** Compresses LLM chat history inside [busbar](https://getbusbar.com)
 using [headroom](https://github.com/headroomlabs-ai/headroom)'s Rust
 compression core (`TextCrusher`, pure BM25: no model, no network, no proxy).
-A rewrite gate on busbar's hook wire; targets busbar 1.3.0 and pins a
-`headroom-core` rev.
+A `kind: hook` `prompt: rw` rewrite gate, shipped as a signed `dlopen`
+plugin busbar loads in-process over its plugin ABI (no standalone binary,
+no socket); targets busbar's `dev` branch (pre-1.5.0, where the plugin ABI
+this crate depends on lives) and pins a `headroom-core` rev.
 
 ## Benchmark
 
@@ -36,7 +38,7 @@ protocols and payloads) — the gateway is not where your latency goes. And **He
 adds ~`547` µs** to compress an 11 KB history, with a **tight tail**: p99 is only
 ~1.1× p50, because busbar and the hook are single Rust binaries with no garbage
 collector — nothing in the path pauses to sweep memory. Compression cost scales with
-history size (direct socket driver, p50): `150` µs at 2 KB, `380` µs at 8 KB, `720` µs
+history size (in-process dlopen call, p50): `150` µs at 2 KB, `380` µs at 8 KB, `720` µs
 at 16 KB, `2,900` µs at 64 KB.
 
 On a two-second inference call, `547` µs is **0.03%** of the request.
@@ -68,7 +70,7 @@ Headroom's own HTTP proxy reports, from
 rightly note, is negligible against multi-second inference. Running the same
 compression core as a busbar gate, the added cost measures **547 µs** on busbar's
 clock. Both are small next to the model call; we make no claim about how their proxy
-is deployed — only that the same core, run as a socket gate on busbar's path, measures
+is deployed — only that the same core, run as an in-process dlopen gate on busbar's path, measures
 in the hundreds of microseconds. Full credit to the
 [Headroom](https://headroomlabs-ai.github.io/headroom/) project for the core; busbar
 just puts it in front of every model you call.
@@ -140,6 +142,41 @@ Because the tarball is signed with busbar's release key, it loads as first-party
 zero extra trust configuration (`plugins.trust.allow_unsigned` is only needed for
 unsigned/dev builds).
 
+### 2. Plugin drop-in (if you already run busbar)
+
+If you already have a busbar deployment — [`getbusbar/busbar`](https://github.com/GetBusbar/busbar)
+or your own build — install Headroom into it the same way you'd install any other
+first-party plugin:
+
+1. Grab the signed tarball for your platform from this repo's
+   [Releases](https://github.com/GetBusbar/headroom-hook/releases/latest)
+   (`busbar-headroom-<version>-<target>.tar.gz` — Linux x86_64/arm64, macOS
+   x86_64/arm64, Windows x86_64).
+2. Drop it into busbar's plugin directory and enable plugins in your `config.yaml`:
+
+   ```yaml
+   plugins:
+     enabled: true
+     dir: /etc/busbar/plugins   # or wherever you unpacked the tarball
+   ```
+3. Wire it in as a hook wherever you want compression — globally or per-pool:
+
+   ```yaml
+   global_hooks:
+     - module: busbar-headroom
+       kind: gate
+       prompt: rw            # the rewrite grant
+       timeout_ms: 25        # ~550 µs typical; 25 ms is generous headroom
+       on_error: nothing     # a broken compressor never touches a request
+       settings:
+         target_ratio: 0.5
+         min_savings_pct: 10
+   ```
+
+Because the tarball is signed with busbar's release key, it loads as first-party with
+no extra trust configuration (`plugins.trust.allow_unsigned` is only needed for
+unsigned/dev builds).
+
 ### Build from source
 
 Needs a Rust toolchain ([rustup](https://rustup.rs)); the pinned `headroom-core` rev is
@@ -150,34 +187,34 @@ unsigned in dev mode via `plugins.trust.allow_unsigned`):
 
 ```sh
 git clone https://github.com/GetBusbar/headroom-hook && cd headroom-hook
-cargo build --release      # cdylib: target/release/libheadroom_hook.so (.dylib on macOS)
+cargo build --release --lib   # cdylib: target/release/libheadroom_hook.so (.dylib/.dll elsewhere)
 ```
 
 ### Settings
 
 `target_ratio` (default 0.5, the fraction of tokens to keep), `min_savings_pct`
 (default 10, abstain below this saving), and `price_udollars_per_ktok` (default 2500,
-the $-estimate price) seed the startup values, then live-update as busbar pushes
-settings — retune without a restart over the admin API's hook-settings endpoint. See
-[Metrics](#metrics) below for the matching status/metrics surface.
+the $-estimate price) SEED the startup values — once busbar pushes settings live
+(over the admin API's hook-settings endpoint, or the `settings:` block in
+`config.yaml` above), the push wins. See [Metrics](#metrics) below for the matching
+status/metrics surface.
 
-**OS support.** As a dlopen'd cdylib, Headroom runs wherever busbar itself runs and
-can load a `.so`/`.dylib` built for the target platform — no native Windows build yet
-(build and load inside WSL2 or a Linux container on Windows, same as any other
-first-party hook plugin).
+**OS support.** As a `dlopen`'d cdylib, Headroom runs wherever busbar itself can load
+a plugin built for the target platform — Linux and macOS natively; on Windows, build
+and load it inside WSL2 or a Linux container alongside busbar.
 
-## The wire (busbar's 5-message hook protocol)
+## The plugin ABI (busbar's `HookHandler` calls)
 
-Newline-delimited JSON on one kept-alive Unix-socket connection,
-dispatched by the top-level key:
+No wire, no serialization — busbar calls the loaded plugin in-process through the SDK's
+[`HookHandler`](https://github.com/GetBusbar/busbar) trait:
 
-| message | direction | this hook's reply |
+| call | when | this hook's response |
 |---|---|---|
-| `configure` | busbar → hook, **first line of every connection** + live on a settings PATCH | `{"ack":{"settings_version":N}}` echoing the pushed version — only if the settings applied cleanly (commit-on-ack) |
-| `describe` | busbar → hook, any time | `{schema, dashboard}` — the settings JSON Schema (`GET /api/v1/admin/hooks/headroom/schema`) + the dashboard widget layout |
-| `status` | busbar → hook, any time | `{status:{settings, metrics:[…]}}` — observed settings + self-reported metrics (see [Metrics](#metrics)) |
-| decide / transform | busbar → hook, per request | `{"rewrite":{...}}` or `{}` (abstain) |
-| notify | busbar → hook, fire-and-forget (taps only) | none read |
+| `configure` | on load + live on a settings PATCH | acks with the applied `settings_version` — only if the settings applied cleanly (commit-on-ack) |
+| `describe` | any time | `{schema, dashboard}` — the settings JSON Schema (`GET /api/v1/admin/hooks/headroom/schema`) + the dashboard widget layout |
+| `status` | any time | `{status:{settings, metrics:[…]}}` — observed settings + self-reported metrics (see [Metrics](#metrics)) |
+| `decide` / `transform` | per request | `{"rewrite":{...}}` or `{}` (abstain) |
+| `notify` | fire-and-forget (taps only) | none read |
 
 > **Note:** this table describes the message *shape* busbar's hook contract still
 > speaks conceptually (configure/describe/status/transform/notify); the *transport* it
@@ -198,7 +235,7 @@ curl -X PATCH localhost:8080/api/v1/admin/hooks/headroom/settings \
 
 ## Metrics
 
-The hook reports its own operational metrics on the `status` message, and busbar surfaces them two
+The hook reports its own operational metrics on the `status` call, and busbar surfaces them two
 ways from that one source:
 
 - **Live JSON** — `GET /api/v1/admin/hooks/headroom/status` queries the hook on the spot (you set the
@@ -217,23 +254,26 @@ series carries a `pool` label, so one process serving N pools shows N rows.
 
 ## Wire into busbar (fleet-wide)
 
-Current config shape (`kind: hook` dlopen plugin, not the retired `socket:` gate — see
-[Install and run](#install-and-run) above for the full drop-in steps):
+Plugins are enabled once and referenced by `module:` — a hook is a plugin, there is no
+separate registry block:
 
 ```yaml
 plugins:
   enabled: true
-  dir: /etc/busbar/plugins   # where you dropped busbar-headroom-<arch>.tar.gz
+  dir: /etc/busbar/plugins
 
-pools:
-  default:
-    hooks:
-      - { module: busbar-headroom, kind: gate, prompt: rw, timeout_ms: 50 }
-    members:
-      - model: claude
+global_hooks:                # fires on every request, in order
+  - module: busbar-headroom
+    kind: gate
+    prompt: rw                # the rewrite grant
+    timeout_ms: 25             # ~550 µs typical; 25 ms is generous headroom
+    on_error: nothing          # a broken compressor never touches a request
+    settings:                  # pushed to the plugin on load, live-patchable after
+      target_ratio: 0.5
+      min_savings_pct: 10
 ```
 
-## A/B test it (same binary, two pools)
+## A/B test it (same plugin, two pools)
 
 The clean experiment: one busbar, two pools over the same model — one with
 the hook, one without — and point half your traffic at each. Compare
@@ -242,21 +282,23 @@ per-pool tokens and latency in `/metrics` or `GET /api/v1/admin/usage`.
 ```yaml
 pools:
   with-headroom:
-    hooks: [headroom]    # drop `global: true` from the hook definition
+    hooks: [{ module: busbar-headroom, kind: gate, prompt: rw }]  # drop from global_hooks first
     members: [ { target: claude-sonnet, weight: 1 } ]
   baseline:
     members: [ { target: claude-sonnet, weight: 1 } ]
 ```
 
-> **Status:** pool-scoped rewrite gates are not fired by the current
-> 1.3.0-dev engine yet (the transform pass is global-only), and on
-> same-protocol passthrough the engine's pristine-bytes fast path can skip
-> the rewritten body — both found while building this POC and tracked for
-> the engine. Until then, A/B with two busbar instances (one with
-> `global: true`, one without), which is how the numbers above were
-> measured.
+> **Status:** pool-scoped rewrite gates were not fired by the pre-1.5.0 engine this
+> plugin was built and benchmarked against (the transform pass was global-only at the
+> time), and on same-protocol passthrough the engine's pristine-bytes fast path can
+> skip the rewritten body — both found while building this POC and tracked upstream.
+> If your busbar build still has that limitation, A/B with two busbar instances (one
+> with a `global_hooks` entry, one without) instead, which is how the numbers above
+> were measured. Check `busbar --version` / release notes for the fix.
 
-`scripts/smoke.sh` proves the socket protocol without busbar: the
-configure-ack handshake, a describe, and a rewrite round-trip on one
-connection, in busbar's order.
+[`scripts/docker-smoke.sh`](scripts/docker-smoke.sh) is the release-gate check: it
+builds and packs the plugin from this checkout, `dlopen`s it into a real
+`getbusbar/busbar` container, and proves the rewrite actually reaches the upstream
+(fewer tokens shipped than arrived) — the class of failure `cargo test` alone can't
+catch (manifest/ABI load failures, a silent no-op gate).
 The `bench/` directory has the full measurement rig and results.

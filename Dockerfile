@@ -15,6 +15,8 @@
 # For "one container, zero config, busbar + headroom together" today, use
 # getbusbar/busbar-headroom instead (docker/bundle/Dockerfile,
 # .github/workflows/docker-bundle.yml) — see README.md's "Two ways to run" section.
+# Alternatively, release.yml's signed plugin tarball (drop into an existing busbar's
+# plugins.dir) is the other real release path — see README.md "Install and run".
 # Whether this standalone image concept is still worth reviving (e.g. as a from-source
 # dlopen sidecar loader) or should simply be deleted is a product call for a human to
 # make, not something fixed unilaterally here — this header only documents why the file
