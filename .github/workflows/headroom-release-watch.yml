@@ -1,7 +1,14 @@
 # Watch upstream headroom (headroomlabs-ai/headroom) for a NEW release and, when one appears that is
 # newer than what we're built against, bump our `headroom-core` pin to that release TAG, prove it
-# builds + tests green (lexical / no-ml), then bump our own patch version and push a `v*` tag — which
-# triggers docker.yml + release.yml to republish getbusbar/headroom-hook against the new headroom.
+# builds + tests green (lexical / no-ml), then bump our own patch version and push the commit to
+# `dev` and open (or update) a PR to `main`. Tagging + republishing (docker.yml/release.yml) happens
+# separately, in headroom-release-publish.yml, only once that PR is actually merged — see that
+# file's header for why.
+#
+# Deliberately does NOT touch `main` directly: it isn't a repo admin, so pushing straight to a
+# protected main via GITHUB_TOKEN doesn't actually work (required-review branch protection blocks
+# it, same as it would for any non-admin). `dev` has no such protection, which is the point of the
+# split — see RELEASING.md.
 #
 # Why polling (not a webhook): we don't control headroomlabs-ai/headroom, so their side can't dispatch
 # to us. A daily poll is the realistic catch. Manual `workflow_dispatch` is provided for an immediate run.
@@ -17,8 +24,8 @@ on:
   workflow_dispatch: {}
 
 permissions:
-  contents: write # commit the bump + push the tag
-  actions: write # `gh workflow run` the publish workflows (workflow_dispatch)
+  contents: write # commit the bump + push to dev
+  pull-requests: write # open/update the dev -> main PR
 
 env:
   UPSTREAM: headroomlabs-ai/headroom
@@ -42,6 +49,7 @@ jobs:
       - name: Checkout headroom-hook
         uses: actions/checkout@v4
         with:
+          ref: dev
           path: headroom-hook
           fetch-depth: 0
 
@@ -74,7 +82,7 @@ jobs:
           echo "bump=$bump" >> "$GITHUB_OUTPUT"
           echo "::notice::upstream latest=$latest, current pin=${current:-<commit>}, floor=$FLOOR -> bump=$bump"
 
-      - name: Bump pin, build + test (lexical/no-ml), publish on green
+      - name: Bump pin, build + test (lexical/no-ml), push to dev, open/update PR to main
         if: steps.resolve.outputs.bump == 'yes'
         working-directory: headroom-hook
         env:
@@ -89,7 +97,7 @@ jobs:
           perl -0pi -e 's~headroom-core = \{ git = "https://github.com/headroomlabs-ai/headroom"[^}]*\}~headroom-core = { git = "https://github.com/headroomlabs-ai/headroom", tag = "'"$LATEST"'", default-features = false }~' Cargo.toml
           grep headroom-core Cargo.toml
           cargo update -p headroom-core
-          # Prove the lexical build + tests are green against the new headroom BEFORE republishing.
+          # Prove the lexical build + tests are green against the new headroom BEFORE pushing anything.
           cargo build --release --locked
           cargo test --locked
           # Bump our own patch version (a dependency bump is a new hook release).
@@ -103,15 +111,19 @@ jobs:
           git commit -m "chore(deps): headroom-core -> ${LATEST}; headroom-hook v${new}
 
           Auto-bump by headroom-release-watch: upstream headroom released ${LATEST}, which now carries
-          the ml-feature gate. Built + tested green (lexical/no-ml). Republishing the hook image."
-          git push origin HEAD:main
-          git tag "v${new}" -m "headroom-hook v${new} — built on headroom ${LATEST}"
-          git push origin "v${new}"
-          # A tag pushed with the built-in GITHUB_TOKEN does NOT trigger the `on: push: tags: v*`
-          # workflows (GitHub's recursion guard). workflow_dispatch is the documented EXCEPTION —
-          # GITHUB_TOKEN CAN trigger it — so kick docker.yml + release.yml explicitly against the new
-          # tag ref. Both derive their version from GITHUB_REF_NAME, so `--ref v${new}` yields the
-          # identical `X.Y.Z` + `latest` image tags a native tag-push would (no PAT/secret needed).
-          gh workflow run docker.yml  --ref "v${new}"
-          gh workflow run release.yml --ref "v${new}"
-          echo "::notice::republished headroom-hook v${new} built on headroom ${LATEST}"
+          the ml-feature gate. Built + tested green (lexical/no-ml)."
+          git push origin HEAD:dev
+          echo "new_version=${new}" >> "$GITHUB_ENV"
+
+          # Open a dev -> main PR if one isn't already open (a second bump before the first is
+          # reviewed just adds a commit to the same PR, since it's pushing to the same dev branch).
+          existing="$(gh pr list --repo "${GITHUB_REPOSITORY}" --base main --head dev --state open --json number --jq '.[0].number // empty')"
+          if [ -z "$existing" ]; then
+            gh pr create --repo "${GITHUB_REPOSITORY}" --base main --head dev \
+              --reviewer MattJackson \
+              --title "Release: headroom-hook v${new} (headroom-core ${LATEST})" \
+              --body "Auto-opened by headroom-release-watch. Bumps headroom-core to ${LATEST} and headroom-hook to v${new}. Built + tested green (lexical/no-ml) before this PR was opened. Merging this triggers headroom-release-publish.yml, which tags the merge commit and republishes docker.yml + release.yml."
+          else
+            echo "::notice::PR #$existing already open dev -> main, pushed additional commit onto it"
+          fi
+          echo "::notice::pushed headroom-hook v${new} (headroom-core ${LATEST}) to dev; awaiting PR review/merge to publish"

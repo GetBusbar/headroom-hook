@@ -1,0 +1,50 @@
+# Fires when a dev -> main PR opened by headroom-release-watch.yml is actually merged. Tags the
+# resulting main commit and republishes docker.yml + release.yml against that tag.
+#
+# Split out of headroom-release-watch.yml on purpose: that workflow only ever touches `dev` (see
+# its own header for why — GITHUB_TOKEN can't push straight to protected main). Cutting a real
+# release tag against a commit that isn't actually on `main` yet would be premature — this
+# workflow only runs once the promoting PR has a human's review on it and GitHub has actually
+# merged it, so the tag always points at a commit that's really on main.
+name: headroom-release-publish
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: write # push the tag
+  actions: write # `gh workflow run` docker.yml/release.yml
+
+jobs:
+  publish:
+    if: github.event.pull_request.merged == true && github.event.pull_request.head.ref == 'dev'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Tag the merged commit and republish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          new="$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)"
+          tag="v${new}"
+          if git rev-parse "$tag" >/dev/null 2>&1; then
+            echo "::notice::$tag already exists, nothing to do (probably a non-version-bump PR merged to main)"
+            exit 0
+          fi
+          git tag "$tag" -m "headroom-hook ${tag}"
+          git push origin "$tag"
+          # A tag pushed with the built-in GITHUB_TOKEN does NOT trigger the `on: push: tags: v*`
+          # workflows (GitHub's recursion guard). workflow_dispatch is the documented EXCEPTION —
+          # GITHUB_TOKEN CAN trigger it — so kick docker.yml + release.yml explicitly against the new
+          # tag ref. Both derive their version from GITHUB_REF_NAME, so `--ref` yields the identical
+          # X.Y.Z + latest image tags a native tag-push would (no PAT/secret needed).
+          gh workflow run docker.yml  --ref "$tag"
+          gh workflow run release.yml --ref "$tag"
+          echo "::notice::tagged and republished headroom-hook $tag"
