@@ -23,12 +23,42 @@ use std::time::Duration;
 
 /// Locate the built `headroom-hook` cdylib in the target dir (mirrors the loader's hook_plugin_path).
 /// `[package] name = "headroom-hook"` -> cargo's cdylib filename is `libheadroom_hook.{so,dylib}`.
+///
+/// Checks BOTH `<profile_dir>/<name>` (the "uplifted" copy Cargo produces only when `[lib]` is a
+/// ROOT build target of the invocation, e.g. `cargo build --all-targets`) AND
+/// `<profile_dir>/deps/<name>` (the raw compiler output, refreshed on EVERY build that recompiles
+/// the lib, uplifted or not). A bare `cargo test` (what this repo's own CI runs) does NOT uplift
+/// the cdylib to the top-level profile dir, only to `target/deps` — checking only `profile_dir`
+/// silently finds nothing even though the cdylib really was built, so every test below would
+/// no-op via this function's `None` return, appearing to pass without exercising a single line of
+/// the real cdylib. Same fix already applied to store-postgres-plugin's, auth-oidc-plugin's,
+/// webrequest-hook's, and busbarAI core's hook-test-plugin's equivalent `plugin_path()` helpers.
 fn plugin_path() -> Option<std::path::PathBuf> {
-    let exe = std::env::current_exe().ok()?;
-    let profile_dir = exe.parent()?.parent()?;
-    let name = busbar_plugin_loader::plugin_library_filename("headroom_hook");
-    let candidate = profile_dir.join(&name);
-    candidate.exists().then_some(candidate)
+    let candidate = (|| {
+        let exe = std::env::current_exe().ok()?;
+        let profile_dir = exe.parent()?.parent()?;
+        let name = busbar_plugin_loader::plugin_library_filename("headroom_hook");
+        let uplifted = profile_dir.join(&name);
+        let raw = profile_dir.join("deps").join(&name);
+        [uplifted, raw]
+            .into_iter()
+            .filter_map(|p| {
+                std::fs::metadata(&p)
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .map(|mtime| (p, mtime))
+            })
+            .max_by_key(|(_, mtime)| *mtime)
+            .map(|(p, _)| p)
+    })();
+    if candidate.is_none() && std::env::var_os("CI").is_some() {
+        panic!(
+            "the headroom-hook cdylib is not built under CI: `cargo test` must build it \
+             (checked both the uplifted target dir and target/deps). Refusing to silently skip \
+             real coverage."
+        );
+    }
+    candidate
 }
 
 /// A synthetic log-dump line set: many segments, mostly noise, one load-bearing ERROR — realistic

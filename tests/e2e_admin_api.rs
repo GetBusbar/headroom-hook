@@ -54,12 +54,38 @@ use std::time::{Duration, Instant};
 
 /// Locate the built `headroom-hook` cdylib in the target dir (mirrors `tests/e2e.rs`'s own
 /// `plugin_path()` — kept separate since the two files must each stand alone).
+///
+/// Checks BOTH the uplifted `<profile_dir>/<name>` copy and the raw `<profile_dir>/deps/<name>`
+/// compiler output — a bare `cargo test` (what this repo's own CI runs) never uplifts, only
+/// `target/deps`, so checking only the former silently finds nothing even though the cdylib was
+/// really built. Same fix already applied to store-postgres-plugin's, auth-oidc-plugin's,
+/// webrequest-hook's, and busbarAI core's hook-test-plugin's equivalent `plugin_path()` helpers.
 fn plugin_path() -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?;
-    let profile_dir = exe.parent()?.parent()?;
-    let name = busbar_plugin_loader::plugin_library_filename("headroom_hook");
-    let candidate = profile_dir.join(&name);
-    candidate.exists().then_some(candidate)
+    let candidate = (|| {
+        let exe = std::env::current_exe().ok()?;
+        let profile_dir = exe.parent()?.parent()?;
+        let name = busbar_plugin_loader::plugin_library_filename("headroom_hook");
+        let uplifted = profile_dir.join(&name);
+        let raw = profile_dir.join("deps").join(&name);
+        [uplifted, raw]
+            .into_iter()
+            .filter_map(|p| {
+                std::fs::metadata(&p)
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .map(|mtime| (p, mtime))
+            })
+            .max_by_key(|(_, mtime)| *mtime)
+            .map(|(p, _)| p)
+    })();
+    if candidate.is_none() && std::env::var_os("CI").is_some() {
+        panic!(
+            "the headroom-hook cdylib is not built under CI: `cargo test` must build it \
+             (checked both the uplifted target dir and target/deps). Refusing to silently skip \
+             real coverage."
+        );
+    }
+    candidate
 }
 
 /// The sibling `busbarAI` checkout's root — the same path convention this crate's own `Cargo.toml`
