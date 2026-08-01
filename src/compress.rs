@@ -203,6 +203,20 @@ fn est_tokens(chars: u64) -> u64 {
     chars.div_ceil(4)
 }
 
+/// Whole microseconds folded to fractional milliseconds, for the `headroom_overhead_ms_*` summary.
+/// Pulled out of `build_status` so the unit conversion is directly unit-testable without needing a
+/// real (non-deterministic) wall-clock sample.
+fn us_to_ms(us: u128) -> f64 {
+    us as f64 / 1000.0
+}
+
+/// Estimated dollars saved from tokens saved, priced at `price_udollars_per_ktok` (micro-dollars
+/// per 1,000 tokens). Pulled out of `build_status` so the pricing arithmetic is directly
+/// unit-testable with exact expected values instead of only exercised indirectly via `status`.
+fn estimate_dollars_saved(tokens_saved: u64, price_udollars_per_ktok: f64) -> f64 {
+    tokens_saved as f64 * price_udollars_per_ktok / 1000.0 / 1_000_000.0
+}
+
 /// The `transform` op: compress the granted prompt's history, keep the ask. Returns `{}` (abstain)
 /// whenever there is no grant, no/too-short history, or the savings don't clear `min_savings_pct`;
 /// otherwise `{"rewrite": {"messages": [...]}}` with each entry in BODY form
@@ -320,9 +334,8 @@ pub fn build_status(knobs: &RwLock<Knobs>, metrics: &Mutex<Metrics>) -> Value {
         // headroom_overhead_ms_* — Headroom's real millisecond overhead SUMMARY (not a histogram):
         // two counters (_sum, _count) + two gauges (_min, _max), µs folded to ms to match the unit.
         if s.overhead_us_count > 0 {
-            let ms = |us: u128| us as f64 / 1000.0;
             out.push(json!({
-                "name": "headroom_overhead_ms_sum", "type": "counter", "value": ms(s.overhead_us_sum),
+                "name": "headroom_overhead_ms_sum", "type": "counter", "value": us_to_ms(s.overhead_us_sum),
                 "labels": {"pool": pool}, "label": "Overhead (sum)", "unit": "ms", "viz": "counter",
                 "help": "Sum of Headroom processing overhead in milliseconds"
             }));
@@ -333,19 +346,19 @@ pub fn build_status(knobs: &RwLock<Knobs>, metrics: &Mutex<Metrics>) -> Value {
             }));
             out.push(json!({
                 "name": "headroom_overhead_ms_min", "type": "gauge",
-                "value": ms(s.overhead_us_min as u128), "labels": {"pool": pool},
+                "value": us_to_ms(s.overhead_us_min as u128), "labels": {"pool": pool},
                 "label": "Overhead (min)", "unit": "ms", "viz": "number",
                 "help": "Minimum observed Headroom overhead in milliseconds"
             }));
             out.push(json!({
                 "name": "headroom_overhead_ms_max", "type": "gauge",
-                "value": ms(s.overhead_us_max as u128), "labels": {"pool": pool},
+                "value": us_to_ms(s.overhead_us_max as u128), "labels": {"pool": pool},
                 "label": "Overhead (max)", "unit": "ms", "viz": "number",
                 "help": "Maximum observed Headroom overhead in milliseconds"
             }));
         }
         // busbar-native extra (non-conflicting name): estimated $ saved with a confidence interval.
-        let dollars = tokens_saved as f64 * k.price_udollars_per_ktok / 1000.0 / 1_000_000.0;
+        let dollars = estimate_dollars_saved(tokens_saved, k.price_udollars_per_ktok);
         out.push(json!({
             "name": "dollars_saved", "type": "gauge", "value": dollars,
             "labels": {"pool": pool}, "label": "Proxy $ saved", "unit": "$", "viz": "number",

@@ -75,6 +75,46 @@ fn compresses_history_keeps_ask() {
     assert!(msgs[0].get("text").is_none());
 }
 
+/// The LAST message (the ask) is preserved verbatim even when it is itself long/compressible —
+/// proving `run_transform`'s `last` index actually singles out the final message rather than, say,
+/// running every message (including the ask) through the compressor.
+#[test]
+fn ask_message_is_never_compressed_even_when_compressible() {
+    let ask = log_dump(40);
+    let payload = transform_payload(vec![("user", log_dump(40)), ("user", ask.clone())]);
+    let knobs = locked(Knobs {
+        target_ratio: 0.4,
+        min_savings_pct: 10.0,
+        ..Knobs::default()
+    });
+    let reply = transform(&payload, &knobs);
+    let msgs = reply["rewrite"]["messages"]
+        .as_array()
+        .expect("rewrite arm");
+    assert_eq!(
+        msgs[1]["content"].as_str().unwrap(),
+        ask,
+        "the ask (last message) must survive verbatim, even though it is itself compressible"
+    );
+}
+
+/// Every message empty (`chars_before == 0`) must always abstain, even at the most permissive
+/// `min_savings_pct: 0.0` bar — there is nothing to have "saved" from zero input chars, so
+/// `committed` must gate on `chars_before > 0`, not merely on clearing the savings percentage.
+#[test]
+fn all_empty_messages_never_commit_even_at_zero_savings_bar() {
+    let payload = transform_payload(vec![("user", String::new()), ("user", String::new())]);
+    let knobs = locked(Knobs {
+        min_savings_pct: 0.0,
+        ..Knobs::default()
+    });
+    assert_eq!(
+        transform(&payload, &knobs),
+        json!({}),
+        "zero input chars must never commit a rewrite, regardless of the savings bar"
+    );
+}
+
 /// A short chat abstains (`{}`) — nothing worth compressing.
 #[test]
 fn short_chat_abstains() {
@@ -134,6 +174,8 @@ fn bad_configure_never_acks_and_keeps_settings() {
         json!({"target_ratio": "half"}),
         json!({"target_ratio": 2.0}),
         json!({"min_savings_pct": -1}),
+        json!({"price_udollars_per_ktok": -1}),
+        json!({"price_udollars_per_ktok": 1_000_001.0}),
     ];
     for v in bad_maps {
         let settings = v.as_object().unwrap();
@@ -141,6 +183,19 @@ fn bad_configure_never_acks_and_keeps_settings() {
             apply_settings(settings).is_err(),
             "must reject {settings:?}"
         );
+    }
+}
+
+/// `price_udollars_per_ktok` at its documented boundaries (0.0 and 1_000_000.0 inclusive) applies
+/// cleanly — the inverse of `bad_configure_never_acks_and_keeps_settings`'s just-outside-the-range
+/// cases, pinning the `0.0..=1_000_000.0` range check to exactly the boundary it claims.
+#[test]
+fn price_udollars_per_ktok_boundaries_apply_cleanly() {
+    for boundary in [0.0, 1_000_000.0] {
+        let settings =
+            serde_json::Map::from_iter([("price_udollars_per_ktok".to_string(), json!(boundary))]);
+        let applied = apply_settings(&settings).expect("boundary value must apply");
+        assert_eq!(applied.price_udollars_per_ktok, boundary);
     }
 }
 
@@ -196,7 +251,17 @@ fn status_reports_headroom_named_metrics() {
     assert_eq!(saved["type"], "counter");
     assert!(saved["value"].as_u64().unwrap() > 0);
     assert_eq!(saved["labels"]["pool"], "p"); // transform_payload routes pool "p"
-    assert!(by_name("headroom_tokens_input_total").is_some());
+    let input_total = by_name("headroom_tokens_input_total").expect("headroom_tokens_input_total")
+        ["value"]
+        .as_u64()
+        .unwrap();
+    assert!(input_total > 0, "chars_seen must actually accumulate");
+    assert!(
+        saved["value"].as_u64().unwrap() < input_total,
+        "tokens saved must be a genuine fraction of the input, not the whole input (chars_out \
+         must actually be subtracted, not stuck at zero): saved={} input={input_total}",
+        saved["value"]
+    );
     assert!(
         by_name("headroom_requests_total").unwrap()["value"]
             .as_u64()
@@ -205,16 +270,20 @@ fn status_reports_headroom_named_metrics() {
     );
 
     // overhead is Headroom's real ms SUMMARY: two counters (_sum,_count) + two gauges (_min,_max).
-    assert_eq!(
-        by_name("headroom_overhead_ms_sum").unwrap()["type"],
-        "counter"
+    let sum = by_name("headroom_overhead_ms_sum").expect("overhead sum");
+    assert_eq!(sum["type"], "counter");
+    assert!(
+        sum["value"].as_f64().unwrap() > 0.0,
+        "overhead_us_sum must actually accumulate, not stay stuck at zero"
     );
     let cnt = by_name("headroom_overhead_ms_count").expect("overhead count");
     assert_eq!(cnt["type"], "counter");
     assert!(cnt["value"].as_u64().unwrap() >= 1);
-    assert_eq!(
-        by_name("headroom_overhead_ms_min").unwrap()["type"],
-        "gauge"
+    let min = by_name("headroom_overhead_ms_min").expect("overhead min");
+    assert_eq!(min["type"], "gauge");
+    assert!(
+        min["value"].as_f64().unwrap() > 0.0,
+        "overhead_us_min must be set from the first sample, not left at its zero default"
     );
     assert_eq!(
         by_name("headroom_overhead_ms_max").unwrap()["type"],
@@ -247,6 +316,59 @@ fn status_with_no_traffic_is_clean() {
     let status = build_status(&knobs, &Mutex::new(Metrics::default()));
     assert!(status["status"]["metrics"].as_array().unwrap().is_empty());
     assert_eq!(status["status"]["settings"]["min_savings_pct"], 10.0);
+}
+
+/// `status.settings_version` is `null` until the FIRST `configure` push (0 is "never configured",
+/// not a real version), and echoes the real number once one has landed.
+#[test]
+fn settings_version_is_null_until_first_configure_then_echoes() {
+    let knobs = locked(Knobs::default());
+    let status = build_status(&knobs, &Mutex::new(Metrics::default()));
+    assert_eq!(
+        status["status"]["settings_version"],
+        Value::Null,
+        "settings_version 0 (never configured) must render as null, not 0"
+    );
+
+    let configured = locked(Knobs {
+        settings_version: 7,
+        ..Knobs::default()
+    });
+    let status = build_status(&configured, &Mutex::new(Metrics::default()));
+    assert_eq!(status["status"]["settings_version"], json!(7));
+}
+
+/// `est_tokens` rounds a char count UP to the nearest whole token at 4 chars/token — direct
+/// boundary coverage independent of any timing/compression side effect.
+#[test]
+fn est_tokens_rounds_up_at_the_four_char_boundary() {
+    assert_eq!(est_tokens(0), 0);
+    assert_eq!(est_tokens(1), 1, "any remainder rounds up to a whole token");
+    assert_eq!(est_tokens(4), 1, "exactly one token's worth of chars");
+    assert_eq!(est_tokens(5), 2, "5 chars rounds up to 2 tokens");
+    assert_eq!(est_tokens(8), 2);
+}
+
+/// `us_to_ms` is the exact `/1000.0` unit conversion the `headroom_overhead_ms_*` summary depends
+/// on — a deterministic value, unlike the wall-clock samples `build_status` normally feeds it.
+#[test]
+fn us_to_ms_converts_microseconds_to_milliseconds() {
+    assert_eq!(us_to_ms(0), 0.0);
+    assert_eq!(us_to_ms(1500), 1.5);
+    assert_eq!(us_to_ms(2_500_000), 2500.0);
+}
+
+/// `estimate_dollars_saved` at an exact, hand-computed value — pins the `* price / 1000.0 /
+/// 1_000_000.0` formula against both `%` and `*` corruptions of either divisor, deterministically.
+#[test]
+fn estimate_dollars_saved_matches_hand_computed_value() {
+    // 1000 tokens * 2500 micro-dollars/ktok / 1000 / 1_000_000 = 0.0025 dollars.
+    assert_eq!(estimate_dollars_saved(1000, 2500.0), 0.0025);
+    // A price that is NOT a round number of the divisors, so `%`/`*` corruptions of either `/`
+    // produce a visibly different result than the true division: 777 * 333.0 / 1000 / 1_000_000.
+    let expected = 777.0 * 333.0 / 1000.0 / 1_000_000.0;
+    assert_eq!(estimate_dollars_saved(777, 333.0), expected);
+    assert_eq!(estimate_dollars_saved(0, 2500.0), 0.0);
 }
 
 /// Latency: compress a realistic multi-KB history and print the wall time (feasibility datum; run
