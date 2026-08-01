@@ -30,3 +30,14 @@ busbar-plugin-sdk = { path = "../busbarAI/crates/plugin-sdk" }
 tokio = { version = "1", features = ["rt", "macros"] }
 busbar-plugin-loader = { path = "../busbarAI/crates/plugin-loader" }
 busbar-api = { path = "../busbarAI/crates/api" }
+# Dev-only: the real-admin-API e2e test builds+drives an actual `busbar` process over HTTP (install
+# a signed plugin tarball via POST /api/v1/admin/plugins, mint a key, drive a real chat completion)
+# — a blocking client keeps that test synchronous, no tokio runtime needed. Same major version
+# busbarAI's own `busbar` crate pins, rustls-tls only, mirroring its trimmed feature set.
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+# Dev-only: base64-encodes the packed tarball into POST /api/v1/admin/plugins's JSON body.
+base64 = "0.22"
+# Dev-only: a tiny synchronous HTTP server standing in for the upstream provider, so the e2e test can
+# capture the exact request body busbar forwarded (proving the compression actually landed on the
+# wire), without needing a whole axum/tokio server stack in a blocking test.
+tiny_http = "0.12"
