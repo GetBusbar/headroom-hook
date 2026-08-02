@@ -15,7 +15,7 @@ providers:
   mock:
     protocol: openai
     base_url: "http://127.0.0.1:MOCK_UPSTREAM_PORT"
-    api_key_env: MOCK_KEY
+    api_key: { env: MOCK_KEY }
 
 models:
   claude:
