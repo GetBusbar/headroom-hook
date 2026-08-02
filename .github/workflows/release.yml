@@ -45,7 +45,7 @@ env:
   # every other first-party plugin's ci.yml/release.yml already established. Update to `main` once
   # busbar 1.5.0 actually ships; until then the plugin ABI surface this crate depends on lives on
   # `dev` (the actively-developed 1.5.0 line — NOT the older, now-stale `1.5.0-dev` branch).
-  BUSBAR_REF: dev
+  BUSBAR_REF: 5b78db9fe0059a08907978f15bcde67e8cd757f9 # v1.5.0 release SHA (GetBusbar/busbar main, 2026-08-02)
 
 jobs:
   # Create the Release first so the parallel per-target upload jobs have something to attach to
