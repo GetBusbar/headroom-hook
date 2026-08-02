@@ -179,3 +179,29 @@ jobs:
         uses: actions/attest-build-provenance@v4
         with:
           subject-path: "plugin-dist/*.tar.gz"
+
+  # Instant marketing-site rebuild the moment this plugin ships a real release -- marketing's
+  # deploy.yml listens for this exact repository_dispatch event type (plus its own daily-poll
+  # fallback, so a missed/failed dispatch here is never a permanent gap). Same RELEASE_DISPATCH_TOKEN
+  # pattern busbar core's own release.yml uses for its downstream fan-out -- see that file's
+  # notify-downstream job for the template this mirrors. Fails loud (not a silent no-op) if the
+  # secret isn't provisioned, so a missing secret can't masquerade as "nothing to notify."
+  notify-marketing:
+    needs: [headroom-plugin]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch upstream-release to the marketing site
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_DISPATCH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::RELEASE_DISPATCH_TOKEN is not provisioned on this repo -- cannot notify" \
+                 "marketing instantly. marketing's own daily poll will still pick this release up" \
+                 "within 24h (self-healing fallback intact)." >&2
+            exit 1
+          fi
+          gh api "repos/GetBusbar/marketing/dispatches" \
+            -f event_type=upstream-release \
+            -f "client_payload[repo]=${GITHUB_REPOSITORY}" \
+            -f "client_payload[tag]=${GITHUB_REF_NAME}"
