@@ -174,9 +174,16 @@ jobs:
           path: busbarAI/target/pgo/${{ matrix.target }}/release/busbar
           if-no-files-found: error
 
-      - uses: actions/upload-artifact@v4
+      # Named to match the `busbar-*` glob the `publish` job's download-artifact step filters on
+      # (it previously didn't, so this was uploaded twice — once per matrix arch — and never
+      # downloaded at all, silently breaking every publish at the "Arrange per-arch layout" step
+      # with `cp: cannot stat 'staged/providers-yaml/providers.yaml'`). The file itself doesn't
+      # vary by arch, so only the amd64 leg uploads it — the arm64 leg would otherwise collide on
+      # the same artifact name.
+      - if: matrix.arch == 'amd64'
+        uses: actions/upload-artifact@v4
         with:
-          name: providers-yaml
+          name: busbar-providers-yaml
           path: busbarAI/providers.yaml
           if-no-files-found: error
 
@@ -273,6 +280,8 @@ jobs:
     name: build & push image
     needs: build-binaries
     runs-on: ubuntu-latest
+    outputs:
+      ver: ${{ steps.ver.outputs.ver }}
     steps:
       - uses: actions/checkout@v4
 
@@ -288,7 +297,7 @@ jobs:
           mv staged/busbar-amd64/busbar binaries/amd64/busbar
           mv staged/busbar-arm64/busbar binaries/arm64/busbar
           chmod +x binaries/amd64/busbar binaries/arm64/busbar
-          cp staged/providers-yaml/providers.yaml providers.yaml
+          cp staged/busbar-providers-yaml/providers.yaml providers.yaml
           mv staged/busbar-headroom-amd64/busbar-headroom-amd64.tar.gz plugins/amd64/busbar-headroom.tar.gz
           mv staged/busbar-headroom-arm64/busbar-headroom-arm64.tar.gz plugins/arm64/busbar-headroom.tar.gz
           mv staged/busbar-headroom-libs-amd64/* plugins/amd64/lib/
@@ -343,3 +352,23 @@ jobs:
           subject-name: index.docker.io/${{ env.DOCKERHUB_IMAGE }}
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: false
+
+  # Proves the image `publish` just pushed actually WORKS, not just that it built: boots it
+  # against a local mock upstream (no live provider key needed) and checks, over the real admin
+  # API and a real chat request, that headroom is loaded AND genuinely compresses traffic — the
+  # same externally-observable proof tests/e2e_admin_api.rs already established for a bare
+  # binary, now against the packaged container every user actually pulls. Before this job existed
+  # the image had never been smoke-tested at all (see .github/scripts/docker-bundle-smoke-test/).
+  smoke-test:
+    name: smoke test bundled image
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run smoke test against the just-published image
+        run: |
+          set -euo pipefail
+          VER="${{ needs.publish.outputs.ver }}"
+          TAG="${VER:-test}"
+          bash .github/scripts/docker-bundle-smoke-test/run.sh "${{ env.DOCKERHUB_IMAGE }}:${TAG}"

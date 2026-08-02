@@ -1,0 +1,33 @@
+# The docker-bundle CI smoke test's config.yaml: identical in shape to ../../../docker/bundle/
+# config.yaml (the image's real baked-in default — same auth, same pool, same headroom wiring),
+# with only the provider swapped from a real Anthropic endpoint to the smoke test's local mock
+# upstream (mock_upstream.py), so the check needs no live API key and runs the SAME plugin-loading
+# and hook-wiring path a real deployment does.
+
+listen: "0.0.0.0:8080"
+
+auth:
+  chain: []                                            # matches the shipped default (open relay)
+  admin_auth:
+    - admin-tokens: { token: { env: BUSBAR_ADMIN_TOKEN } }
+
+providers:
+  mock:
+    protocol: openai
+    base_url: "http://127.0.0.1:MOCK_UPSTREAM_PORT"
+    api_key_env: MOCK_KEY
+
+models:
+  claude:
+    provider: mock
+
+pools:
+  default:
+    hooks:
+      - { module: busbar-headroom, kind: gate, prompt: rw, timeout_ms: 50 }
+    members:
+      - model: claude
+
+plugins:
+  enabled: true
+  dir: /etc/busbar/plugins
