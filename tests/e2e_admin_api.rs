@@ -326,11 +326,16 @@ fn admin_api_installs_headroom_and_a_real_request_is_compressed_upstream() {
     // legitimate real deployment shape, so this test uses it rather than chasing the pool-scoped
     // gap, which is a busbarAI-core question, not a headroom-hook one.)
     let config_v1 = work.join("config-1.yaml");
+    // 512 MiB request-body cap (`limits:` below): the install POST carries the packed cdylib as
+    // base64, and a DEBUG-profile build of this plugin (what `cargo test` produces on CI) blows
+    // past the 32 MiB default — busbar then rejects at the content-length check and the client
+    // sees a BrokenPipe mid-upload rather than a 413.
     let base_config = |global_hooks: &str| {
         format!(
             "listen: \"127.0.0.1:{port}\"\n\
              admin_listen: \"127.0.0.1:{admin_port}\"\n\
              auth:\n  chain: [keys]\n  admin_auth:\n    - admin-tokens: {{ token: {{ env: E2E_ADMIN_TOKEN }} }}\n\
+             limits:\n  request_body_max_bytes: 536870912\n\
              plugins:\n  enabled: true\n  dir: {}\n  trust:\n    allow_unsigned: true\n\
              providers:\n  mock:\n    api_key: {{ env: MOCK_KEY }}\n\
              models:\n  test-model:\n    provider: mock\n\
