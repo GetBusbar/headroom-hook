@@ -1,0 +1,7 @@
+# Overrides the image's baked-in /etc/busbar/providers.yaml for the smoke test: config.yaml
+# (in this same directory) references a `mock` provider, and busbar 1.5.0 requires every provider
+# named in config.yaml to also be declared in the providers.yaml catalog.
+mock:
+  protocol: openai
+  base_url: "http://127.0.0.1:MOCK_UPSTREAM_PORT"
+  error_map: {}

@@ -29,12 +29,14 @@ MOCK_PID=$!
 trap 'kill "$MOCK_PID" >/dev/null 2>&1 || true; docker rm -f smoke-headroom >/dev/null 2>&1 || true; rm -rf "$WORK"' EXIT
 
 sed "s/MOCK_UPSTREAM_PORT/$MOCK_PORT/" "$SCRIPT_DIR/config.yaml" > "$WORK/config.yaml"
+sed "s/MOCK_UPSTREAM_PORT/$MOCK_PORT/" "$SCRIPT_DIR/providers.yaml" > "$WORK/providers.yaml"
 
 echo "== starting $IMAGE =="
 docker run -d --name smoke-headroom --network host \
   -e BUSBAR_ADMIN_TOKEN="$ADMIN_TOKEN" \
   -e MOCK_KEY="unused-mock-provider-key" \
   -v "$WORK/config.yaml:/etc/busbar/config.yaml:ro" \
+  -v "$WORK/providers.yaml:/etc/busbar/providers.yaml:ro" \
   "$IMAGE"
 
 echo "== waiting for busbar to come up =="
