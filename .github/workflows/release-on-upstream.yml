@@ -1,0 +1,171 @@
+# Re-cut this plugin's own next signed release when busbar core ships.
+#
+# On an upstream-release dispatch (or daily self-heal cron, or a manual run) this re-pins
+# release.yml's BUSBAR_REF to the new core SHA, patch-bumps THIS repo's own version line, and pushes
+# a v* tag — which fires release.yml (build + sign + publish). No plain `push:` trigger, so merging
+# this file cannot itself cut a release. Cron only cuts when core's latest release SHA is ahead of
+# our pin, so an idle day is a no-op. Pushes use RELEASE_DISPATCH_TOKEN (bypass-capable) as busbar-bot.
+name: release-on-upstream
+
+on:
+  repository_dispatch:
+    types: [upstream-release]
+  schedule:
+    - cron: "43 8 * * *" # daily; minute staggered per repo so the fleet's crons don't all fire at once
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Explicit version to cut (e.g. 1.0.2). Blank = patch-bump this repo's latest v* tag."
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  # Serialize overlapping dispatch + cron so we never double-cut; never cancel a run mid-tag-push.
+  group: release-on-upstream-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  cut:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main (bypass-capable token, full history + tags)
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: true
+          token: ${{ secrets.RELEASE_DISPATCH_TOKEN }}
+
+      - name: Configure git identity
+        run: |
+          git config user.name "busbar-bot"
+          git config user.email "bot@getbusbar.com"
+
+      - name: Resolve whether a new busbar release warrants a cut
+        id: resolve
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_DISPATCH_TOKEN }}
+          DISPATCH_SHA: ${{ github.event.client_payload.sha }}
+          DISPATCH_VERSION: ${{ github.event.client_payload.version }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          cur_pin="$(awk '/^[[:space:]]*BUSBAR_REF:/{print $2; exit}' .github/workflows/release.yml)"
+          echo "current BUSBAR_REF pin: ${cur_pin:-<none>}"
+          target_sha=""
+          bver=""
+          force=no
+          case "$EVENT_NAME" in
+            repository_dispatch)
+              target_sha="${DISPATCH_SHA:-}"
+              bver="${DISPATCH_VERSION:-}"
+              ;;
+            workflow_dispatch)
+              force=yes # a human explicitly asked for a re-cut
+              ;;
+            schedule)
+              # Self-heal: discover busbar's latest RELEASE and the commit it points at. Best-effort —
+              # if we cannot read it, do nothing (never guess a SHA, so the cron never spuriously cuts).
+              tag="$(gh api repos/GetBusbar/busbar/releases/latest --jq .tag_name 2>/dev/null || true)"
+              if [ -n "$tag" ]; then
+                bver="${tag#v}"
+                target_sha="$(gh api "repos/GetBusbar/busbar/commits/${tag}" --jq .sha 2>/dev/null || true)"
+              fi
+              ;;
+          esac
+          should_cut=no
+          repin_sha=""
+          if [ "$force" = yes ]; then
+            should_cut=yes
+            echo "::notice::manual workflow_dispatch -> cutting a release"
+          elif [ -n "$target_sha" ] && [ "$target_sha" != "$cur_pin" ]; then
+            should_cut=yes
+            repin_sha="$target_sha"
+            echo "::notice::busbar advanced (pinned=${cur_pin:-none} -> ${target_sha}) -> cutting a release"
+          else
+            echo "::notice::no new busbar release (pinned=${cur_pin:-none}, target=${target_sha:-none}) -> nothing to do"
+          fi
+          {
+            echo "should_cut=$should_cut"
+            echo "repin_sha=$repin_sha"
+            echo "bver=$bver"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Re-pin BUSBAR_REF to the new busbar SHA
+        if: steps.resolve.outputs.should_cut == 'yes' && steps.resolve.outputs.repin_sha != ''
+        env:
+          REPIN_SHA: ${{ steps.resolve.outputs.repin_sha }}
+          BVER: ${{ steps.resolve.outputs.bver }}
+        run: |
+          set -euo pipefail
+          today="$(date -u +%Y-%m-%d)"
+          vlabel="${BVER:+v${BVER} }"
+          sed -i -E "s|^([[:space:]]*BUSBAR_REF:[[:space:]]*)[0-9a-fA-F]+.*\$|\\1${REPIN_SHA} # busbar ${vlabel}release SHA (GetBusbar/busbar main, ${today})|" .github/workflows/release.yml
+          grep -n 'BUSBAR_REF:' .github/workflows/release.yml
+
+      - name: Compute this repo's next version
+        id: ver
+        if: steps.resolve.outputs.should_cut == 'yes'
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          set -euo pipefail
+          if [ -n "${INPUT_VERSION:-}" ]; then
+            next="${INPUT_VERSION#v}"
+            echo "::notice::using explicit workflow_dispatch version -> ${next}"
+          else
+            latest="$(git tag --list 'v*' | sort -V | tail -1)"
+            if [ -z "$latest" ]; then
+              echo "::error::no existing v* tag to patch-bump from"
+              exit 1
+            fi
+            base="${latest#v}"
+            major="$(echo "$base" | cut -d. -f1)"
+            minor="$(echo "$base" | cut -d. -f2)"
+            patch="$(echo "$base" | cut -d. -f3)"
+            next="${major}.${minor}.$((patch + 1))"
+            echo "::notice::latest tag ${latest} -> next v${next}"
+          fi
+          echo "tag=v${next}" >> "$GITHUB_OUTPUT"
+
+      - name: Guard — no-op if the tag already exists
+        id: guard
+        if: steps.resolve.outputs.should_cut == 'yes'
+        env:
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+            echo "::notice::${TAG} already exists — idempotent no-op, exiting 0"
+            echo "exists=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=no" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit the re-pin to main
+        if: steps.guard.outputs.exists == 'no' && steps.resolve.outputs.repin_sha != ''
+        env:
+          TAG: ${{ steps.ver.outputs.tag }}
+          REPIN_SHA: ${{ steps.resolve.outputs.repin_sha }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet .github/workflows/release.yml; then
+            echo "::notice::BUSBAR_REF already at ${REPIN_SHA}, no re-pin commit needed"
+          else
+            git add .github/workflows/release.yml
+            git commit -m "release.yml: re-pin busbar sibling to ${REPIN_SHA} for the ${TAG} release"
+            git push origin HEAD:main
+          fi
+
+      - name: Create and push the release tag
+        if: steps.guard.outputs.exists == 'no'
+        env:
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git tag "${TAG}"
+          git push origin "refs/tags/${TAG}"
+          echo "::notice::pushed ${TAG} — release.yml will now build + sign + publish"
