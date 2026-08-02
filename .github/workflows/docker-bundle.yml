@@ -126,6 +126,11 @@ jobs:
       - name: Build busbar (PGO, required/fail-closed)
         working-directory: busbarAI
         env:
+          # The busbar release ed25519 PUBLIC key, embedded at build time (plugin-sign's
+          # option_env!) — the comment on the pack step below always claimed this was baked in,
+          # but the env var was never actually set here, so the bundled busbar refused its own
+          # signed headroom plugin ("embeds no busbar release key", the smoke-test failure).
+          BUSBAR_RELEASE_PUBKEY: ${{ vars.BUSBAR_RELEASE_PUBKEY }}
           PGO_TARGET: ${{ matrix.target }}
           CC: musl-gcc
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
@@ -175,6 +180,9 @@ jobs:
           if-no-files-found: error
 
       - uses: actions/upload-artifact@v4
+        # One leg only: v4 artifacts are per-name; both matrix legs uploading the same name
+        # produces duplicate artifacts (the file is identical — same checkout — so pick amd64).
+        if: matrix.arch == 'amd64'
         with:
           name: providers-yaml
           path: busbarAI/providers.yaml
@@ -281,6 +289,14 @@ jobs:
         with:
           pattern: busbar-*
           path: staged
+
+      # `pattern: busbar-*` can never match the `providers-yaml` artifact — the "Arrange" step's
+      # `cp staged/providers-yaml/providers.yaml` failed on every run until this explicit download.
+      - name: Stage providers.yaml into build context
+        uses: actions/download-artifact@v4
+        with:
+          name: providers-yaml
+          path: staged/providers-yaml
 
       - name: Arrange per-arch layout
         run: |
