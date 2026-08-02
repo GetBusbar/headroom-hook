@@ -40,13 +40,6 @@ permissions:
   id-token: write      # OIDC identity for keyless Sigstore signing (provenance)
   attestations: write  # record the build-provenance attestation
 
-env:
-  # Which busbar branch to check out as the sibling path dependency — same BUSBAR_REF convention
-  # every other first-party plugin's ci.yml/release.yml already established. Update to `main` once
-  # busbar 1.5.0 actually ships; until then the plugin ABI surface this crate depends on lives on
-  # `dev` (the actively-developed 1.5.0 line — NOT the older, now-stale `1.5.0-dev` branch).
-  BUSBAR_REF: 5b78db9fe0059a08907978f15bcde67e8cd757f9 # v1.5.0 release SHA (GetBusbar/busbar main, 2026-08-02)
-
 jobs:
   # Create the Release first so the parallel per-target upload jobs have something to attach to
   # (uploading from a matrix without a pre-existing release races -> "release not found").
@@ -104,11 +97,16 @@ jobs:
         with:
           path: headroom-hook
 
+      - name: Resolve busbar ref from .busbar-ref
+        id: ref
+        run: echo "sha=$(cut -d' ' -f1 headroom-hook/.busbar-ref)" >> "$GITHUB_OUTPUT"
+        shell: bash
+
       - name: Checkout busbar (sibling path dependency)
         uses: actions/checkout@v7
         with:
           repository: GetBusbar/busbar
-          ref: ${{ env.BUSBAR_REF }}
+          ref: ${{ steps.ref.outputs.sha }}
           path: busbarAI
 
       # headroom-hook's Cargo.toml currently declares busbar-plugin-sdk as an ABSOLUTE local path

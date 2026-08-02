@@ -1,10 +1,13 @@
-# Re-cut this plugin's own next signed release when busbar core ships.
+# Re-cut this plugin's own next signed release when busbar core ships a NEWER version.
 #
-# On an upstream-release dispatch (or daily self-heal cron, or a manual run) this re-pins
-# release.yml's BUSBAR_REF to the new core SHA, patch-bumps THIS repo's own version line, and pushes
-# a v* tag — which fires release.yml (build + sign + publish). No plain `push:` trigger, so merging
-# this file cannot itself cut a release. Cron only cuts when core's latest release SHA is ahead of
-# our pin, so an idle day is a no-op. Pushes use RELEASE_DISPATCH_TOKEN (bypass-capable) as busbar-bot.
+# On an upstream-release dispatch (or daily self-heal cron, or a manual run) this compares the
+# incoming busbar version against the version recorded in .busbar-ref (field 2) and cuts ONLY when
+# the incoming version is strictly newer (sort -V). A same-version core re-tag is a clean no-op:
+# no commit, no tag. On a real cut it overwrites .busbar-ref with "<new-sha> <new-version>" — a
+# PLAIN data file the RELEASE_DISPATCH_TOKEN can push, unlike release.yml which is a workflow file
+# the PAT is refused (GH013) — patch-bumps THIS repo's own v* tag, and pushes it, firing release.yml
+# (build + sign + publish). No plain `push:` trigger, so merging this file cannot itself cut a
+# release. Pushes use RELEASE_DISPATCH_TOKEN (bypass-capable) as busbar-bot.
 name: release-on-upstream
 
 on:
@@ -44,7 +47,7 @@ jobs:
           git config user.name "busbar-bot"
           git config user.email "bot@getbusbar.com"
 
-      - name: Resolve whether a new busbar release warrants a cut
+      - name: Resolve whether a newer busbar version warrants a cut
         id: resolve
         env:
           GH_TOKEN: ${{ secrets.RELEASE_DISPATCH_TOKEN }}
@@ -53,58 +56,50 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
-          cur_pin="$(awk '/^[[:space:]]*BUSBAR_REF:/{print $2; exit}' .github/workflows/release.yml)"
-          echo "current BUSBAR_REF pin: ${cur_pin:-<none>}"
-          target_sha=""
-          bver=""
+          rec_sha="$(cut -d' ' -f1 .busbar-ref)"
+          rec_ver="$(cut -d' ' -f2 .busbar-ref)"
+          echo "recorded busbar ref: ${rec_sha:-<none>} ${rec_ver:-<none>}"
+          in_sha=""
+          in_ver=""
           force=no
           case "$EVENT_NAME" in
             repository_dispatch)
-              target_sha="${DISPATCH_SHA:-}"
-              bver="${DISPATCH_VERSION:-}"
+              in_sha="${DISPATCH_SHA:-}"
+              in_ver="${DISPATCH_VERSION:-}"
               ;;
             workflow_dispatch)
               force=yes # a human explicitly asked for a re-cut
               ;;
             schedule)
               # Self-heal: discover busbar's latest RELEASE and the commit it points at. Best-effort —
-              # if we cannot read it, do nothing (never guess a SHA, so the cron never spuriously cuts).
+              # if we cannot read it, do nothing (never guess, so the cron never spuriously cuts).
               tag="$(gh api repos/GetBusbar/busbar/releases/latest --jq .tag_name 2>/dev/null || true)"
               if [ -n "$tag" ]; then
-                bver="${tag#v}"
-                target_sha="$(gh api "repos/GetBusbar/busbar/commits/${tag}" --jq .sha 2>/dev/null || true)"
+                in_ver="${tag#v}"
+                in_sha="$(gh api "repos/GetBusbar/busbar/commits/${tag}" --jq .sha 2>/dev/null || true)"
               fi
               ;;
           esac
+          in_ver="${in_ver#v}"
           should_cut=no
-          repin_sha=""
           if [ "$force" = yes ]; then
             should_cut=yes
             echo "::notice::manual workflow_dispatch -> cutting a release"
-          elif [ -n "$target_sha" ] && [ "$target_sha" != "$cur_pin" ]; then
+          elif [ -z "$in_ver" ]; then
+            echo "::notice::no incoming busbar version (recorded=${rec_ver:-none}) -> nothing to do"
+          elif [ "$in_ver" = "$rec_ver" ]; then
+            echo "::notice::incoming busbar ${in_ver} == recorded ${rec_ver} (same-version re-tag) -> nothing to do"
+          elif [ "$(printf '%s\n%s\n' "$rec_ver" "$in_ver" | sort -V | tail -1)" = "$in_ver" ]; then
             should_cut=yes
-            repin_sha="$target_sha"
-            echo "::notice::busbar advanced (pinned=${cur_pin:-none} -> ${target_sha}) -> cutting a release"
+            echo "::notice::busbar advanced (recorded=${rec_ver:-none} -> ${in_ver}) -> cutting a release"
           else
-            echo "::notice::no new busbar release (pinned=${cur_pin:-none}, target=${target_sha:-none}) -> nothing to do"
+            echo "::notice::incoming busbar ${in_ver} not newer than recorded ${rec_ver} -> nothing to do"
           fi
           {
             echo "should_cut=$should_cut"
-            echo "repin_sha=$repin_sha"
-            echo "bver=$bver"
+            echo "in_sha=$in_sha"
+            echo "in_ver=$in_ver"
           } >> "$GITHUB_OUTPUT"
-
-      - name: Re-pin BUSBAR_REF to the new busbar SHA
-        if: steps.resolve.outputs.should_cut == 'yes' && steps.resolve.outputs.repin_sha != ''
-        env:
-          REPIN_SHA: ${{ steps.resolve.outputs.repin_sha }}
-          BVER: ${{ steps.resolve.outputs.bver }}
-        run: |
-          set -euo pipefail
-          today="$(date -u +%Y-%m-%d)"
-          vlabel="${BVER:+v${BVER} }"
-          sed -i -E "s|^([[:space:]]*BUSBAR_REF:[[:space:]]*)[0-9a-fA-F]+.*\$|\\1${REPIN_SHA} # busbar ${vlabel}release SHA (GetBusbar/busbar main, ${today})|" .github/workflows/release.yml
-          grep -n 'BUSBAR_REF:' .github/workflows/release.yml
 
       - name: Compute this repo's next version
         id: ver
@@ -145,18 +140,20 @@ jobs:
             echo "exists=no" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Commit the re-pin to main
-        if: steps.guard.outputs.exists == 'no' && steps.resolve.outputs.repin_sha != ''
+      - name: Record the new busbar ref in .busbar-ref
+        if: steps.guard.outputs.exists == 'no' && steps.resolve.outputs.in_sha != ''
         env:
           TAG: ${{ steps.ver.outputs.tag }}
-          REPIN_SHA: ${{ steps.resolve.outputs.repin_sha }}
+          IN_SHA: ${{ steps.resolve.outputs.in_sha }}
+          IN_VER: ${{ steps.resolve.outputs.in_ver }}
         run: |
           set -euo pipefail
-          if git diff --quiet .github/workflows/release.yml; then
-            echo "::notice::BUSBAR_REF already at ${REPIN_SHA}, no re-pin commit needed"
+          printf '%s %s\n' "${IN_SHA}" "${IN_VER}" > .busbar-ref
+          if git diff --quiet .busbar-ref; then
+            echo "::notice::.busbar-ref already at ${IN_SHA} ${IN_VER}, no commit needed"
           else
-            git add .github/workflows/release.yml
-            git commit -m "release.yml: re-pin busbar sibling to ${REPIN_SHA} for the ${TAG} release"
+            git add .busbar-ref
+            git commit -m ".busbar-ref: record busbar ${IN_VER} (${IN_SHA}) for the ${TAG} release"
             git push origin HEAD:main
           fi
 
