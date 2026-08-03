@@ -52,6 +52,10 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+/// Fixed ed25519 signing secret (64 hex = 32 bytes) for this e2e test. 1.5.1 requires an
+/// explicit signing key to mint virtual keys; busbar no longer auto-generates one.
+const TEST_SIGNING_KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
 /// Locate the built `headroom-hook` cdylib in the target dir (mirrors `tests/e2e.rs`'s own
 /// `plugin_path()` — kept separate since the two files must each stand alone).
 ///
@@ -330,7 +334,7 @@ fn admin_api_installs_headroom_and_a_real_request_is_compressed_upstream() {
         format!(
             "listen: \"127.0.0.1:{port}\"\n\
              admin_listen: \"127.0.0.1:{admin_port}\"\n\
-             auth:\n  chain: [keys]\n  admin_auth:\n    - admin-tokens: {{ token: {{ env: E2E_ADMIN_TOKEN }} }}\n\
+             auth:\n  chain: [keys]\n  signing_key: {{ env: BUSBAR_SIGNING_KEY }}\n  admin_auth:\n    - admin-tokens: {{ token: {{ env: E2E_ADMIN_TOKEN }} }}\n\
              plugins:\n  enabled: true\n  dir: {}\n  trust:\n    allow_unsigned: true\n\
              providers:\n  mock:\n    api_key: {{ env: MOCK_KEY }}\n\
              models:\n  test-model:\n    provider: mock\n\
@@ -352,6 +356,7 @@ fn admin_api_installs_headroom_and_a_real_request_is_compressed_upstream() {
         cmd.env("BUSBAR_CONFIG", config)
             .env("BUSBAR_PROVIDERS", &providers_file)
             .env("E2E_ADMIN_TOKEN", &admin_token)
+            .env("BUSBAR_SIGNING_KEY", TEST_SIGNING_KEY)
             .env("MOCK_KEY", "unused-mock-provider-key")
             .env("BUSBAR_STATE_FILE", "")
             .env("BUSBAR_CONFIG_OVERLAY", &overlay)
