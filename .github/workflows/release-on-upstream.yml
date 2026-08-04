@@ -21,6 +21,11 @@ on:
         description: "Explicit version to cut (e.g. 1.0.2). Blank = patch-bump this repo's latest v* tag."
         required: false
         type: string
+      dry_run:
+        description: "Self-test: compute the next version and log the planned cut WITHOUT tagging, committing, or publishing."
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -56,8 +61,13 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
-          rec_sha="$(cut -d' ' -f1 .busbar-ref)"
-          rec_ver="$(cut -d' ' -f2 .busbar-ref)"
+          # A brand-new plugin may not carry .busbar-ref yet — treat a missing file as "no record"
+          # instead of letting `cut` fail the step (keeps first-release repos on the happy path).
+          rec_sha=""; rec_ver=""
+          if [ -f .busbar-ref ]; then
+            rec_sha="$(cut -d' ' -f1 .busbar-ref)"
+            rec_ver="$(cut -d' ' -f2 .busbar-ref)"
+          fi
           echo "recorded busbar ref: ${rec_sha:-<none>} ${rec_ver:-<none>}"
           in_sha=""
           in_ver=""
@@ -106,25 +116,17 @@ jobs:
         if: steps.resolve.outputs.should_cut == 'yes'
         env:
           INPUT_VERSION: ${{ github.event.inputs.version }}
+          # First-release default when this repo has no prior v* tag yet (brand-new plugin).
+          INITIAL_VERSION: "1.0.0"
         run: |
           set -euo pipefail
-          if [ -n "${INPUT_VERSION:-}" ]; then
-            next="${INPUT_VERSION#v}"
-            echo "::notice::using explicit workflow_dispatch version -> ${next}"
-          else
-            latest="$(git tag --list 'v*' | sort -V | tail -1)"
-            if [ -z "$latest" ]; then
-              echo "::error::no existing v* tag to patch-bump from"
-              exit 1
-            fi
-            base="${latest#v}"
-            major="$(echo "$base" | cut -d. -f1)"
-            minor="$(echo "$base" | cut -d. -f2)"
-            patch="$(echo "$base" | cut -d. -f3)"
-            next="${major}.${minor}.$((patch + 1))"
-            echo "::notice::latest tag ${latest} -> next v${next}"
-          fi
-          echo "tag=v${next}" >> "$GITHUB_OUTPUT"
+          # Single source of truth for the next-version math (.github/scripts/next-version.sh),
+          # exercised in CI by release-selftest.yml. Handles: explicit version, patch-bump of the
+          # highest v* tag, and the FIRST-RELEASE case (no prior tag -> INITIAL_VERSION, instead of
+          # erroring) — and never references an unset variable under `set -u`.
+          tag="$(bash .github/scripts/next-version.sh)"
+          echo "::notice::next version -> ${tag}"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
 
       - name: Guard — no-op if the tag already exists
         id: guard
@@ -140,8 +142,22 @@ jobs:
             echo "exists=no" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Dry-run summary (self-test, publishes nothing)
+        if: steps.resolve.outputs.should_cut == 'yes' && github.event.inputs.dry_run == 'true'
+        env:
+          TAG: ${{ steps.ver.outputs.tag }}
+          EXISTS: ${{ steps.guard.outputs.exists }}
+        run: |
+          set -euo pipefail
+          echo "::notice::[dry-run] computed next tag=${TAG:-<none>} (already-exists=${EXISTS:-?}). No commit, no tag, no publish."
+          test -n "${TAG:-}" || { echo "::error::dry-run: version-compute produced an EMPTY tag"; exit 1; }
+          case "${TAG}" in
+            v[0-9]*.[0-9]*.[0-9]*) echo "dry-run OK: ${TAG} is a valid vMAJOR.MINOR.PATCH tag" ;;
+            *) echo "::error::dry-run: ${TAG} is not a valid semver tag"; exit 1 ;;
+          esac
+
       - name: Record the new busbar ref in .busbar-ref
-        if: steps.guard.outputs.exists == 'no' && steps.resolve.outputs.in_sha != ''
+        if: steps.guard.outputs.exists == 'no' && steps.resolve.outputs.in_sha != '' && github.event.inputs.dry_run != 'true'
         env:
           TAG: ${{ steps.ver.outputs.tag }}
           IN_SHA: ${{ steps.resolve.outputs.in_sha }}
@@ -158,7 +174,7 @@ jobs:
           fi
 
       - name: Create and push the release tag
-        if: steps.guard.outputs.exists == 'no'
+        if: steps.guard.outputs.exists == 'no' && github.event.inputs.dry_run != 'true'
         env:
           TAG: ${{ steps.ver.outputs.tag }}
         run: |
