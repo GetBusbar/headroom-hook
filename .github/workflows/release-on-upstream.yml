@@ -1,0 +1,184 @@
+# Re-cut this plugin's own next signed release when busbar core ships a NEWER version.
+#
+# On an upstream-release dispatch (or daily self-heal cron, or a manual run) this compares the
+# incoming busbar version against the version recorded in .busbar-ref (field 2) and cuts ONLY when
+# the incoming version is strictly newer (sort -V). A same-version core re-tag is a clean no-op:
+# no commit, no tag. On a real cut it overwrites .busbar-ref with "<new-sha> <new-version>" — a
+# PLAIN data file the RELEASE_DISPATCH_TOKEN can push, unlike release.yml which is a workflow file
+# the PAT is refused (GH013) — patch-bumps THIS repo's own v* tag, and pushes it, firing release.yml
+# (build + sign + publish). No plain `push:` trigger, so merging this file cannot itself cut a
+# release. Pushes use RELEASE_DISPATCH_TOKEN (bypass-capable) as busbar-bot.
+name: release-on-upstream
+
+on:
+  repository_dispatch:
+    types: [upstream-release]
+  schedule:
+    - cron: "43 8 * * *" # daily; minute staggered per repo so the fleet's crons don't all fire at once
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Explicit version to cut (e.g. 1.0.2). Blank = patch-bump this repo's latest v* tag."
+        required: false
+        type: string
+      dry_run:
+        description: "Self-test: compute the next version and log the planned cut WITHOUT tagging, committing, or publishing."
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  # Serialize overlapping dispatch + cron so we never double-cut; never cancel a run mid-tag-push.
+  group: release-on-upstream-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  cut:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main (bypass-capable token, full history + tags)
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: true
+          token: ${{ secrets.RELEASE_DISPATCH_TOKEN }}
+
+      - name: Configure git identity
+        run: |
+          git config user.name "busbar-bot"
+          git config user.email "bot@getbusbar.com"
+
+      - name: Resolve whether a newer busbar version warrants a cut
+        id: resolve
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_DISPATCH_TOKEN }}
+          DISPATCH_SHA: ${{ github.event.client_payload.sha }}
+          DISPATCH_VERSION: ${{ github.event.client_payload.version }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          # A brand-new plugin may not carry .busbar-ref yet — treat a missing file as "no record"
+          # instead of letting `cut` fail the step (keeps first-release repos on the happy path).
+          rec_sha=""; rec_ver=""
+          if [ -f .busbar-ref ]; then
+            rec_sha="$(cut -d' ' -f1 .busbar-ref)"
+            rec_ver="$(cut -d' ' -f2 .busbar-ref)"
+          fi
+          echo "recorded busbar ref: ${rec_sha:-<none>} ${rec_ver:-<none>}"
+          in_sha=""
+          in_ver=""
+          force=no
+          case "$EVENT_NAME" in
+            repository_dispatch)
+              in_sha="${DISPATCH_SHA:-}"
+              in_ver="${DISPATCH_VERSION:-}"
+              ;;
+            workflow_dispatch)
+              force=yes # a human explicitly asked for a re-cut
+              ;;
+            schedule)
+              # Self-heal: discover busbar's latest RELEASE and the commit it points at. Best-effort —
+              # if we cannot read it, do nothing (never guess, so the cron never spuriously cuts).
+              tag="$(gh api repos/GetBusbar/busbar/releases/latest --jq .tag_name 2>/dev/null || true)"
+              if [ -n "$tag" ]; then
+                in_ver="${tag#v}"
+                in_sha="$(gh api "repos/GetBusbar/busbar/commits/${tag}" --jq .sha 2>/dev/null || true)"
+              fi
+              ;;
+          esac
+          in_ver="${in_ver#v}"
+          should_cut=no
+          if [ "$force" = yes ]; then
+            should_cut=yes
+            echo "::notice::manual workflow_dispatch -> cutting a release"
+          elif [ -z "$in_ver" ]; then
+            echo "::notice::no incoming busbar version (recorded=${rec_ver:-none}) -> nothing to do"
+          elif [ "$in_ver" = "$rec_ver" ]; then
+            echo "::notice::incoming busbar ${in_ver} == recorded ${rec_ver} (same-version re-tag) -> nothing to do"
+          elif [ "$(printf '%s\n%s\n' "$rec_ver" "$in_ver" | sort -V | tail -1)" = "$in_ver" ]; then
+            should_cut=yes
+            echo "::notice::busbar advanced (recorded=${rec_ver:-none} -> ${in_ver}) -> cutting a release"
+          else
+            echo "::notice::incoming busbar ${in_ver} not newer than recorded ${rec_ver} -> nothing to do"
+          fi
+          {
+            echo "should_cut=$should_cut"
+            echo "in_sha=$in_sha"
+            echo "in_ver=$in_ver"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Compute this repo's next version
+        id: ver
+        if: steps.resolve.outputs.should_cut == 'yes'
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          # First-release default when this repo has no prior v* tag yet (brand-new plugin).
+          INITIAL_VERSION: "1.0.0"
+        run: |
+          set -euo pipefail
+          # Single source of truth for the next-version math (.github/scripts/next-version.sh),
+          # exercised in CI by release-selftest.yml. Handles: explicit version, patch-bump of the
+          # highest v* tag, and the FIRST-RELEASE case (no prior tag -> INITIAL_VERSION, instead of
+          # erroring) — and never references an unset variable under `set -u`.
+          tag="$(bash .github/scripts/next-version.sh)"
+          echo "::notice::next version -> ${tag}"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Guard — no-op if the tag already exists
+        id: guard
+        if: steps.resolve.outputs.should_cut == 'yes'
+        env:
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+            echo "::notice::${TAG} already exists — idempotent no-op, exiting 0"
+            echo "exists=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=no" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Dry-run summary (self-test, publishes nothing)
+        if: steps.resolve.outputs.should_cut == 'yes' && github.event.inputs.dry_run == 'true'
+        env:
+          TAG: ${{ steps.ver.outputs.tag }}
+          EXISTS: ${{ steps.guard.outputs.exists }}
+        run: |
+          set -euo pipefail
+          echo "::notice::[dry-run] computed next tag=${TAG:-<none>} (already-exists=${EXISTS:-?}). No commit, no tag, no publish."
+          test -n "${TAG:-}" || { echo "::error::dry-run: version-compute produced an EMPTY tag"; exit 1; }
+          case "${TAG}" in
+            v[0-9]*.[0-9]*.[0-9]*) echo "dry-run OK: ${TAG} is a valid vMAJOR.MINOR.PATCH tag" ;;
+            *) echo "::error::dry-run: ${TAG} is not a valid semver tag"; exit 1 ;;
+          esac
+
+      - name: Record the new busbar ref in .busbar-ref
+        if: steps.guard.outputs.exists == 'no' && steps.resolve.outputs.in_sha != '' && github.event.inputs.dry_run != 'true'
+        env:
+          TAG: ${{ steps.ver.outputs.tag }}
+          IN_SHA: ${{ steps.resolve.outputs.in_sha }}
+          IN_VER: ${{ steps.resolve.outputs.in_ver }}
+        run: |
+          set -euo pipefail
+          printf '%s %s\n' "${IN_SHA}" "${IN_VER}" > .busbar-ref
+          if git diff --quiet .busbar-ref; then
+            echo "::notice::.busbar-ref already at ${IN_SHA} ${IN_VER}, no commit needed"
+          else
+            git add .busbar-ref
+            git commit -m ".busbar-ref: record busbar ${IN_VER} (${IN_SHA}) for the ${TAG} release"
+            git push origin HEAD:main
+          fi
+
+      - name: Create and push the release tag
+        if: steps.guard.outputs.exists == 'no' && github.event.inputs.dry_run != 'true'
+        env:
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git tag "${TAG}"
+          git push origin "refs/tags/${TAG}"
+          echo "::notice::pushed ${TAG} — release.yml will now build + sign + publish"

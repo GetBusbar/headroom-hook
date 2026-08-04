@@ -1,0 +1,57 @@
+# CI self-test for the release-on-upstream version-compute logic (guard #135.8).
+# Runs the REAL .github/scripts/next-version.sh against synthetic repos and asserts it produces a
+# valid next version for BOTH the has-prior-tag and no-prior-tag cases — WITHOUT publishing anything.
+# This is what keeps the release automation from silently rotting before the fleet fan-out is armed.
+name: release-selftest
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/scripts/next-version.sh"
+      - ".github/workflows/release-selftest.yml"
+      - ".github/workflows/release-on-upstream.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  next-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: version-compute self-test (no publish)
+        run: |
+          set -euo pipefail
+          script="$PWD/.github/scripts/next-version.sh"
+          test -f "$script" || { echo "::error::missing $script"; exit 1; }
+
+          fail() { echo "::error::$*"; exit 1; }
+          assert_eq() { [ "$1" = "$2" ] || fail "expected '$2' got '$1' ($3)"; }
+
+          work="$(mktemp -d)"
+          git -C "$work" init -q
+          git -C "$work" config user.email t@t
+          git -C "$work" config user.name  t
+
+          # ── no-prior-tag (FIRST RELEASE) ──────────────────────────────────────
+          got="$(cd "$work" && INITIAL_VERSION=1.0.0 bash "$script")"
+          assert_eq "$got" "v1.0.0" "no-tag default"
+          got="$(cd "$work" && INITIAL_VERSION=2.3.0 bash "$script")"
+          assert_eq "$got" "v2.3.0" "no-tag custom initial"
+
+          # ── has-prior-tag (patch-bump the highest v* tag) ─────────────────────
+          git -C "$work" commit -q --allow-empty -m seed
+          git -C "$work" tag v1.0.0
+          git -C "$work" tag v1.0.9
+          git -C "$work" tag v1.2.9
+          got="$(cd "$work" && bash "$script")"
+          assert_eq "$got" "v1.2.10" "patch-bump highest tag"
+
+          # ── explicit version passthrough ──────────────────────────────────────
+          got="$(cd "$work" && INPUT_VERSION=3.4.5 bash "$script")"
+          assert_eq "$got" "v3.4.5" "explicit version"
+          got="$(cd "$work" && INPUT_VERSION=v3.4.5 bash "$script")"
+          assert_eq "$got" "v3.4.5" "explicit version with leading v"
+
+          echo "all version-compute self-tests passed (no-prior-tag AND has-prior-tag)"
