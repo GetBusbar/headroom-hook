@@ -9,17 +9,25 @@
 # before merging (see 39af7ac's commit message, which says exactly this out loud). This closes that
 # gap the same way every other first-party plugin repo already does.
 #
-# busbar_ref is set explicitly to `dev`, NOT left at the reusable workflow's own default
-# (`1.5.0-dev`): this repo's own release.yml/headroom-release-watch.yml env blocks already document
-# that `1.5.0-dev` is the older, now-stale branch and the plugin ABI surface this crate depends on
-# lives on `dev` (the actively-developed 1.5.0 line) — same BUSBAR_REF convention, applied here too.
+# busbar_ref used to be pinned to the literal `dev`, NOT left at the reusable workflow's own default
+# (`1.5.0-dev`), because `1.5.0-dev` is the older, now-stale branch and the plugin ABI surface this
+# crate depends on lives on `dev`. That reasoning still holds for `dev` — but a hard-pinned `dev`
+# makes the qa gate LIE: a push to this repo's `qa` would build core's `dev`, report green, and tell
+# us nothing about whether this plugin actually works against the core release qa is staging. So
+# busbar_ref is now same-branch (`github.ref_name`), matching auth-github / auth-ldap / auth-oidc /
+# hashicorp-vault / store-mysql / store-postgres / webrequest-hook. On `dev` this is byte-identical
+# to the old pin; on `qa` it starts telling the truth.
 name: ci
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main, dev, qa]
   pull_request:
-    branches: [main, dev]
+    branches: [main, dev, qa]
+  # Manual trigger. Needed because `gh run rerun` PINS the reusable-workflow SHA:
+  # a rerun re-uses the plugin-ci.yml snapshot from the original run, so a fix landing in
+  # core's reusable workflow can only be picked up by a NEW run, never by rerunning an old one.
+  workflow_dispatch: {}
 
 jobs:
   ci:
@@ -29,4 +37,4 @@ jobs:
       plugin_kind: hook
       plugin_alias: headroom
       service: none
-      busbar_ref: dev
+      busbar_ref: ${{ github.ref_name }} # same-branch: qa builds core qa, dev builds core dev (no stale main/tag)
