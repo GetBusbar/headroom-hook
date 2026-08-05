@@ -1,27 +1,31 @@
-# STALE — written for the retired Unix-socket transport (docker-compose.yml, now flagged as not
-# currently buildable). Kept as a reference for the config shape; the `hooks:`/`socket:` block below
-# no longer matches how Headroom loads. For the current dlopen-plugin config shape (`plugins:` +
-# `global_hooks:` with `module: busbar-headroom`), see README.md "Install and run" / "Wire into
-# busbar" and bench/config.hook.yaml (a working example from this repo's own benchmark harness).
-#
-# Minimal busbar config for the `docker compose up` demo. Registers the Headroom
-# compression hook on every request + one pool over Anthropic. The busbar image
-# ships the vetted provider catalog, so you only name the provider and give it a
-# key via the environment (see docker-compose.yml). Swap the provider/model for
+# Minimal busbar config for a Headroom trial. Registers the Headroom compression hook on every
+# request + one pool over Anthropic. The busbar image ships the vetted provider catalog, so you
+# only name the provider and give it a key via the environment. Swap the provider/model for
 # whatever you use — busbar speaks all six protocols.
+#
+# Headroom is a signed `dlopen` plugin busbar loads IN-PROCESS: there is no hook container and no
+# Unix socket (that transport is retired, along with docker-compose.yml). Drop the signed tarball
+# into `plugins.dir` and reference it by `module:` from a named hook, as below. See README.md
+# "Install and run" / "Wire into busbar" and bench/config.hook.yaml (a working example from this
+# repo's own benchmark harness).
 listen: "0.0.0.0:8080"
 
+# Plugin instances are DEFINED ONCE here and REFERENCED BY BARE NAME from attach points.
 hooks:
   headroom:
+    module: busbar-headroom
     kind: gate
-    socket: /run/busbar/headroom.sock   # the shared-volume path in docker-compose.yml
     prompt: rw            # the rewrite grant
-    global: true          # compress every request
+    timeout_ms: 25        # ~550 µs typical; 25 ms is generous headroom
     on_error: nothing     # a broken compressor never touches a request
+
+plugins:
+  enabled: true
+  dir: /etc/busbar/plugins   # or wherever you dropped the tarball
 
 providers:
   anthropic:
-    api_key_env: ANTHROPIC_KEY
+    api_key: { env: ANTHROPIC_KEY }
 
 models:
   claude:
@@ -30,7 +34,8 @@ models:
     upstream_model: claude-3-5-sonnet-20241022
 
 pools:
+  hooks: [headroom]       # the all-pools attach: compress every request
   default:
     members:
-      - target: claude
+      - model: claude
         weight: 1

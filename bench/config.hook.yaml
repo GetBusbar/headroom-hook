@@ -1,6 +1,7 @@
 # Hook phase: identical to config.baseline.yaml PLUS the Headroom `kind: hook` dlopen plugin,
-# registered exactly as the busbar docs recommend (docs/hooks.md, docs/plugins.md): a global
-# prompt:rw rewrite gate at target_ratio 0.5 / min_savings_pct 10, with a timeout + on_error
+# registered exactly as the busbar docs recommend (docs/hooks.md, docs/plugins.md): a named
+# prompt:rw rewrite gate attached to every pool via the reserved `pools.hooks:` list, at
+# target_ratio 0.5 / min_savings_pct 10, with a timeout + on_error
 # fail-open equivalent to the old socket-hook deadline. Busbar loads the plugin IN-PROCESS (dlopen)
 # from `plugins.dir` — there is no separate hook container or Unix-socket volume anymore; one
 # busbar container serves both phases.
@@ -14,9 +15,12 @@ listen: "0.0.0.0:8080"
 auth: { chain: [] }
 providers: { mock: { api_key: { env: BENCH_MOCK_KEY } } }
 models: { bench-model: { provider: mock, max_concurrent: 256 } }
-pools: { bench-pool: { members: [ { model: bench-model } ] } }
-global_hooks:
-  - module: busbar-headroom
+pools:
+  hooks: [headroom]                     # the reserved all-pools attach (was `global_hooks:`)
+  bench-pool: { members: [ { model: bench-model } ] }
+hooks:
+  headroom:
+    module: busbar-headroom
     kind: gate
     prompt: rw
     timeout_ms: 25
@@ -26,4 +30,4 @@ plugins:
   enabled: true
   dir: /etc/busbar/plugins
   trust: { allow_unsigned: true }
-observability: { emit_server_timing: true }
+advanced: { response_headers: { server_timing: true } }

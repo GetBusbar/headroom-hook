@@ -102,8 +102,8 @@ default config (one Anthropic provider, one pool, Headroom wired as a global
 the image is built — busbar compiled from source with the same PGO release build
 busbar's own official image uses, Headroom's cdylib built and signed alongside it in
 the same CI run. Mount your own `config.yaml` over `/etc/busbar/config.yaml` to
-replace the default entirely; copy the `plugins:`/`pools.*.hooks` blocks from the
-baked-in default into yours to keep Headroom wired. Published by
+replace the default entirely; copy the `plugins:`/`hooks:`/`pools.*.hooks` blocks from
+the baked-in default into yours to keep Headroom wired. Published by
 [`.github/workflows/docker-bundle.yml`](.github/workflows/docker-bundle.yml).
 
 This image is distinct from `getbusbar/busbar` (busbarAI's own plugin-free image) and
@@ -130,10 +130,12 @@ first-party plugin:
 3. Wire it in as a hook wherever you want compression — globally or per-pool:
 
    ```yaml
+   hooks:                 # define the instance once…
+     headroom: { module: busbar-headroom, kind: gate, prompt: rw, timeout_ms: 50 }
+
    pools:
      default:
-       hooks:
-         - { module: busbar-headroom, kind: gate, prompt: rw, timeout_ms: 50 }
+       hooks: [headroom]  # …then reference it by bare name
        members:
          - model: claude
    ```
@@ -162,8 +164,9 @@ first-party plugin:
 3. Wire it in as a hook wherever you want compression — globally or per-pool:
 
    ```yaml
-   global_hooks:
-     - module: busbar-headroom
+   hooks:                    # the top-level definition map: the NAME is the instance
+     headroom:
+       module: busbar-headroom
        kind: gate
        prompt: rw            # the rewrite grant
        timeout_ms: 25        # ~550 µs typical; 25 ms is generous headroom
@@ -171,6 +174,9 @@ first-party plugin:
        settings:
          target_ratio: 0.5
          min_savings_pct: 10
+
+   pools:
+     hooks: [headroom]       # the reserved all-pools attach (or list it per-pool)
    ```
 
 Because the tarball is signed with busbar's release key, it loads as first-party with
@@ -254,23 +260,28 @@ series carries a `pool` label, so one process serving N pools shows N rows.
 
 ## Wire into busbar (fleet-wide)
 
-Plugins are enabled once and referenced by `module:` — a hook is a plugin, there is no
-separate registry block:
+Plugins are enabled once; a hook instance is DEFINED ONCE in the top-level `hooks:` map (the name
+is the instance, `module:` is the plugin behind it) and REFERENCED BY BARE NAME wherever it
+attaches — there is no separate registry block:
 
 ```yaml
 plugins:
   enabled: true
   dir: /etc/busbar/plugins
 
-global_hooks:                # fires on every request, in order
-  - module: busbar-headroom
+hooks:
+  headroom:
+    module: busbar-headroom
     kind: gate
-    prompt: rw                # the rewrite grant
+    prompt: rw                 # the rewrite grant
     timeout_ms: 25             # ~550 µs typical; 25 ms is generous headroom
     on_error: nothing          # a broken compressor never touches a request
     settings:                  # pushed to the plugin on load, live-patchable after
       target_ratio: 0.5
       min_savings_pct: 10
+
+pools:
+  hooks: [headroom]            # reserved all-pools attach: fires on every request, in order
 ```
 
 ## A/B test it (same plugin, two pools)
@@ -280,12 +291,16 @@ the hook, one without — and point half your traffic at each. Compare
 per-pool tokens and latency in `/metrics` or `GET /api/v1/admin/usage`.
 
 ```yaml
+hooks:
+  headroom: { module: busbar-headroom, kind: gate, prompt: rw }
+
 pools:
+  # NB: no `pools.hooks:` here — the all-pools attach would put the gate on both arms.
   with-headroom:
-    hooks: [{ module: busbar-headroom, kind: gate, prompt: rw }]  # drop from global_hooks first
-    members: [ { target: claude-sonnet, weight: 1 } ]
+    hooks: [headroom]
+    members: [ { model: claude-sonnet, weight: 1 } ]
   baseline:
-    members: [ { target: claude-sonnet, weight: 1 } ]
+    members: [ { model: claude-sonnet, weight: 1 } ]
 ```
 
 > **Status:** pool-scoped rewrite gates were not fired by the pre-1.5.0 engine this
@@ -293,7 +308,7 @@ pools:
 > time), and on same-protocol passthrough the engine's pristine-bytes fast path can
 > skip the rewritten body — both found while building this POC and tracked upstream.
 > If your busbar build still has that limitation, A/B with two busbar instances (one
-> with a `global_hooks` entry, one without) instead, which is how the numbers above
+> with an all-pools `pools.hooks` attach, one without) instead, which is how the numbers above
 > were measured. Check `busbar --version` / release notes for the fix.
 
 [`scripts/docker-smoke.sh`](scripts/docker-smoke.sh) is the release-gate check: it

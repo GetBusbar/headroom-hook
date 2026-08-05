@@ -6,10 +6,12 @@
 
 listen: "0.0.0.0:8080"
 
+identity-providers:
+  admin-tokens: { module: admin-tokens, token: { env: BUSBAR_ADMIN_TOKEN } }
+
 auth:
   chain: []                                            # matches the shipped default (open relay)
-  admin_auth:
-    - admin-tokens: { token: { env: BUSBAR_ADMIN_TOKEN } }
+  admin_auth: [admin-tokens]
 
 providers:
   mock:
@@ -21,10 +23,12 @@ models:
   claude:
     provider: mock
 
+hooks:
+  headroom: { module: busbar-headroom, kind: gate, prompt: rw, timeout_ms: 50 }
+
 pools:
   default:
-    hooks:
-      - { module: busbar-headroom, kind: gate, prompt: rw, timeout_ms: 50 }
+    hooks: [headroom]
     members:
       - model: claude
 

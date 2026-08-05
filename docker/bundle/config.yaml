@@ -15,15 +15,18 @@
 # beyond a quickstart, mount your own config.yaml over this path — see busbar's own docs for the
 # full annotated walkthrough (providers, pools, auth, groups, hooks) to build one from. A mounted
 # config.yaml REPLACES this file entirely (standard Docker bind-mount override): if you want
-# headroom wired into your own config, copy the `plugins:` and `pools.*.hooks` blocks below into
-# it — the tarball at /etc/busbar/plugins/busbar-headroom.tar.gz is still there either way.
+# headroom wired into your own config, copy the `plugins:`, `hooks:` and `pools.*.hooks` blocks
+# below into it — the tarball at /etc/busbar/plugins/busbar-headroom.tar.gz is still there either
+# way.
 
 listen: "0.0.0.0:8080"
 
+identity-providers:
+  admin-tokens: { module: admin-tokens, token: { env: BUSBAR_ADMIN_TOKEN } }
+
 auth:
   chain: []                                            # open data-plane relay — see the note above
-  admin_auth:
-    - admin-tokens: { token: { env: BUSBAR_ADMIN_TOKEN } }
+  admin_auth: [admin-tokens]                           # referenced by name from the block above
 
 providers:
   anthropic:
@@ -33,10 +36,14 @@ models:
   claude:
     provider: anthropic
 
+# Hooks are DEFINED ONCE here (the name is the instance, `module:` is the plugin behind it) and
+# REFERENCED BY BARE NAME from the pool below.
+hooks:
+  headroom: { module: busbar-headroom, kind: gate, prompt: rw, timeout_ms: 50 }
+
 pools:
   default:
-    hooks:
-      - { module: busbar-headroom, kind: gate, prompt: rw, timeout_ms: 50 }
+    hooks: [headroom]
     members:
       - model: claude
 
