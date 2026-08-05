@@ -39,8 +39,8 @@
 //!      ran across the FULL real path (HTTP admin install -> real dlopen -> real hook invocation ->
 //!      real HTTP request mutation -> real upstream receipt), not merely that busbar returned 200.
 //!
-//! Mirrors the pattern the sibling `store-redis` plugin's own
-//! `admin_api_installs_the_redis_plugin_and_writes_land_in_real_redis` test established for a
+//! Mirrors the pattern the sibling `store-valkey` plugin's own
+//! `admin_api_installs_the_valkey_plugin_and_writes_land_in_real_valkey` test established for a
 //! `store` plugin (build the real binaries from the sibling `busbarAI` checkout, pack + install
 //! over the real admin API, restart to apply, independently verify the real effect) — adapted here
 //! for a `hook` plugin, where the "real effect" is an observed request mutation instead of a
@@ -102,7 +102,7 @@ fn busbarai_root() -> PathBuf {
 }
 
 /// Under `CI` a missing prerequisite is a HARD FAILURE, never a silent skip (mirrors the sibling
-/// `store-redis` plugin's own `redis_url()` gating discipline for its admin-API e2e test) — locally
+/// `store-valkey` plugin's own `valkey_url()` gating discipline for its admin-API e2e test) — locally
 /// it's a clean print-and-skip.
 fn require_or_skip(ok: bool, what: &str) -> bool {
     if ok {
@@ -155,7 +155,7 @@ impl Drop for ChildGuard {
 }
 
 /// A free-at-the-moment localhost port (bind-then-drop; a TOCTOU race is possible in principle but
-/// is the accepted pattern for test port allocation, same as the sibling `store-redis` e2e test).
+/// is the accepted pattern for test port allocation, same as the sibling `store-valkey` e2e test).
 fn free_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0")
         .expect("bind an ephemeral port")
