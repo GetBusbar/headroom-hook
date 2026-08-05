@@ -316,39 +316,46 @@ fn admin_api_installs_headroom_and_a_real_request_is_compressed_upstream() {
     .unwrap();
 
     // BOOT #1 config: no gate yet — the whole point is that the gate only becomes real once
-    // installed over the admin API AND wired in on the next boot. There is no top-level `hooks:`
-    // registry section in config.yaml (confirmed by boot #1's own accepted-field list: `listen,
-    // tls, admin_listen, admin_tls, admin_insecure, auth, providers, models, pools, global_hooks,
-    // groups, rate_card, per_request_fee, store, secrets, advanced, observability, plugins,
-    // security, limits, metrics, health, routing` — no `hooks`); an inline `{ module: ...,
-    // kind: gate, prompt: rw, ... }` ref goes in `global_hooks:` (`HookModuleRef` in
-    // `busbarAI/crates/busbar/src/config/mod.rs`), exactly like the commented-out example in
-    // `busbarAI/examples/clean-config-1.5.0.yaml`. (A pool's OWN `hooks: [...]` list also accepts
-    // an inline module ref for a pool-scoped gate, but empirically that path did not fire the
-    // rewrite in manual verification against this exact plugin/config shape — `global_hooks:` is
-    // the directly-documented, confirmed-working path, and a global rewrite gate is itself a
-    // legitimate real deployment shape, so this test uses it rather than chasing the pool-scoped
-    // gap, which is a busbarAI-core question, not a headroom-hook one.)
+    // installed over the admin API AND wired in on the next boot.
+    //
+    // 1.5.3 GRAMMAR (the break-once release; both of the shapes this test used before are now
+    // fail-closed BOOT REFUSALS, not warnings — `config::migrate::detect_legacy_markers` in core):
+    //   * An IdP is DEFINED ONCE under the top-level `identity-providers:` map and REFERENCED BY
+    //     BARE NAME from `auth.admin_auth:` / `auth.chain:`. The old INLINE chain entry
+    //     (`admin_auth:\n  - admin-tokens: { token: … }`) is retired.
+    //   * A hook is DEFINED ONCE under the top-level `hooks:` NAMED map (the key is the hook
+    //     INSTANCE id, `module:` names the `kind: hook` plugin behind it) and ATTACHED by bare name
+    //     — either per-pool (`pools.<p>.hooks:`) or, as here, via the reserved ALL-POOLS
+    //     `pools.hooks:` list, which is exactly what the removed top-level `global_hooks:` lowers
+    //     to. Same shape this repo's own `docker/bundle/config.yaml` and the docker-bundle smoke
+    //     test's config already carry (converted in 79be898).
+    // A global rewrite gate remains the deliberate wiring here (rather than a pool-scoped attach):
+    // it is a legitimate real deployment shape and the one this test has always exercised.
     let config_v1 = work.join("config-1.yaml");
     // 512 MiB request-body cap (`limits:` below): the install POST carries the packed cdylib as
     // base64, and a DEBUG-profile build of this plugin (what `cargo test` produces on CI) blows
     // past the 32 MiB default — busbar then rejects at the content-length check and the client
     // sees a BrokenPipe mid-upload rather than a 413.
-    let base_config = |global_hooks: &str| {
+    //
+    // `hook_defs` is the top-level `hooks:` definition block (empty on boot #1); `pool_attach` is
+    // the reserved all-pools attach line INSIDE `pools:` (indented to the same level as a pool
+    // name, since `hooks:` there is a reserved sibling key of the pool entries, not a pool).
+    let base_config = |hook_defs: &str, pool_attach: &str| {
         format!(
             "listen: \"127.0.0.1:{port}\"\n\
              admin_listen: \"127.0.0.1:{admin_port}\"\n\
-             auth:\n  chain: [keys]\n  signing_key: {{ env: BUSBAR_SIGNING_KEY }}\n  admin_auth:\n    - admin-tokens: {{ token: {{ env: E2E_ADMIN_TOKEN }} }}\n\
+             identity-providers:\n  admin-tokens: {{ module: admin-tokens, token: {{ env: E2E_ADMIN_TOKEN }} }}\n\
+             auth:\n  chain: [keys]\n  signing_key: {{ env: BUSBAR_SIGNING_KEY }}\n  admin_auth: [admin-tokens]\n\
              limits:\n  request_body_max_bytes: 536870912\n\
              plugins:\n  enabled: true\n  dir: {}\n  trust:\n    allow_unsigned: true\n\
              providers:\n  mock:\n    api_key: {{ env: MOCK_KEY }}\n\
              models:\n  test-model:\n    provider: mock\n\
-             {global_hooks}\
-             pools:\n  p:\n    members:\n      - {{ model: test-model, weight: 1 }}\n",
+             {hook_defs}\
+             pools:\n{pool_attach}  p:\n    members:\n      - {{ model: test-model, weight: 1 }}\n",
             plugins_dir.display(),
         )
     };
-    std::fs::write(&config_v1, base_config("")).unwrap();
+    std::fs::write(&config_v1, base_config("", "")).unwrap();
 
     let client = reqwest::blocking::Client::new();
 
@@ -437,7 +444,8 @@ fn admin_api_installs_headroom_and_a_real_request_is_compressed_upstream() {
         // unmodified) and this test would then observe byte-identical bodies upstream even with a
         // correctly installed, correctly wired, correctly firing gate. Raise it generously.
         base_config(
-            "global_hooks:\n  - { module: headroom, kind: gate, prompt: rw, timeout_ms: 500 }\n",
+            "hooks:\n  headroom: { module: headroom, kind: gate, prompt: rw, timeout_ms: 500 }\n",
+            "  hooks: [headroom]\n",
         ),
     )
     .unwrap();

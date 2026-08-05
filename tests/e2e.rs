@@ -164,6 +164,11 @@ fn load(settings: &str) -> Arc<dyn RoutingPolicy> {
 fn req_with_history(history: String, ask: &str) -> RoutingRequest<'static> {
     let total_chars = history.len() + ask.len();
     RoutingRequest {
+        // A DISTINCT non-zero correlation id per fixture (core stamps a real per-request `u64` at
+        // ingress; `0` is what an unstamped/defaulted projection looks like). Nothing asserts on it
+        // today — these projectors don't carry it onto the wire — but the fixture should look like a
+        // real request, so if the projection ever grows the id the two fixtures stay tellable apart.
+        request_id: 1001,
         pool: "p",
         ingress_protocol: "anthropic",
         requested_model: None,
@@ -182,12 +187,18 @@ fn req_with_history(history: String, ask: &str) -> RoutingRequest<'static> {
             ],
         }),
         identity: None,
+        // The DEFAULT (empty) declared-signal bag: this gate declares no request-phase signals, so
+        // the engine hands it exactly this — an empty bag — on every real request. Asserting the
+        // gate's behaviour on the default path is the point, so empty is the CORRECT fixture value,
+        // not a placeholder standing in for coverage that is missing.
+        signals: Default::default(),
     }
 }
 
 /// A request with NO prompt (grant absent): the projector carries no prompt keys → the gate abstains.
 fn req_without_prompt() -> RoutingRequest<'static> {
     RoutingRequest {
+        request_id: 1002,
         pool: "p",
         ingress_protocol: "anthropic",
         requested_model: None,
@@ -200,6 +211,7 @@ fn req_without_prompt() -> RoutingRequest<'static> {
         stream: false,
         prompt: None,
         identity: None,
+        signals: Default::default(),
     }
 }
 
@@ -217,6 +229,8 @@ fn cand(idx: usize) -> Candidate<'static> {
         available_concurrency: 1,
         budget_remaining: None,
         rate_headroom: None,
+        // Candidate-phase declared signals: empty, same reason as the request bag above.
+        signals: Default::default(),
     }
 }
 
