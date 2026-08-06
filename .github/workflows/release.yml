@@ -41,9 +41,44 @@ permissions:
   attestations: write  # record the build-provenance attestation
 
 jobs:
+  # ── TEST GATE ────────────────────────────────────────────────────────────────────────────────
+  # Nothing is built, signed or attested until this repo's own suite passes AGAINST THE EXACT CORE
+  # COMMIT THIS RELEASE WILL BUILD AGAINST.
+  #
+  # This was missing, and the gap was not theoretical: `ci.yml` is armed on branch pushes and PRs
+  # only, so a `v*` tag event did not trigger it AT ALL, while `release-on-upstream.yml`'s cron cuts
+  # those tags automatically. A signed, provenance-attested plugin could therefore ship from a
+  # commit whose suite never ran in that run -- the attestation would faithfully certify the
+  # provenance of an untested artifact.
+  #
+  # `busbar_ref` is resolved from `.busbar-ref`, NOT from the branch: the release builds against a
+  # pinned core SHA, so the gate has to test against that same SHA or it is not testing what ships.
+  # Testing against a moving branch instead is the other half of the same defect.
+  resolve-busbar-ref:
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.ref.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Resolve busbar ref from .busbar-ref
+        id: ref
+        run: echo "sha=$(cut -d' ' -f1 .busbar-ref)" >> "$GITHUB_OUTPUT"
+        shell: bash
+
+  gate:
+    needs: resolve-busbar-ref
+    uses: GetBusbar/busbar/.github/workflows/plugin-ci.yml@dev
+    with:
+      plugin_crate: headroom-hook
+      plugin_kind: hook
+      plugin_alias: headroom
+      service: none
+      busbar_ref: ${{ needs.resolve-busbar-ref.outputs.sha }}
+
   # Create the Release first so the parallel per-target upload jobs have something to attach to
   # (uploading from a matrix without a pre-existing release races -> "release not found").
   create-release:
+    needs: gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

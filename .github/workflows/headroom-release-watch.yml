@@ -113,6 +113,24 @@ jobs:
           git push origin HEAD:dev
           echo "new_version=${new}" >> "$GITHUB_ENV"
 
+          # Fire this repo's REAL gate on the commit just pushed.
+          #
+          # A push made with GITHUB_TOKEN does not trigger workflows -- that is deliberate on
+          # GitHub's side (it stops recursive runs), but the effect here was that a dependency bump
+          # landed on dev with ZERO workflow runs against it and would have ridden to main untested
+          # by the repo's own gate. It happened: `chore(deps): headroom-core -> v0.34.0` sat on dev
+          # with no run at all.
+          #
+          # The `cargo build`/`cargo test` above are NOT a substitute. They run in this workflow's
+          # own environment and exercise the crate alone; `ci.yml` runs the plugin over the real
+          # dlopen ABI seam against a sibling busbar checkout, on the full target matrix. Only the
+          # second one is the gate this repo actually relies on.
+          #
+          # Non-fatal: the bump is already pushed, so failing here would report the bump as failed
+          # when it succeeded. A missed dispatch is visible as a commit with no run.
+          gh workflow run ci.yml --repo "${GITHUB_REPOSITORY}" --ref dev \
+            || echo "::warning::could not dispatch ci.yml for the pushed bump -- run it by hand"
+
           # Open a dev -> main PR if one isn't already open (a second bump before the first is
           # reviewed just adds a commit to the same PR, since it's pushing to the same dev branch).
           existing="$(gh pr list --repo "${GITHUB_REPOSITORY}" --base main --head dev --state open --json number --jq '.[0].number // empty')"
