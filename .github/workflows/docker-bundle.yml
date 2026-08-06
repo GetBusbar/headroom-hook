@@ -90,7 +90,7 @@ jobs:
       - name: Patch headroom-hook's interim path dependencies for CI
         run: |
           set -euo pipefail
-          sed -i.bak 's#/Users/matthew/Developer/busbarAI/busbarAI/crates#../busbarAI/crates#g' headroom-hook/Cargo.toml
+          sed -i.bak -E 's#path = "[^"]*/busbarAI/crates#path = "../busbarAI/crates#g' headroom-hook/Cargo.toml
           rm -f headroom-hook/Cargo.toml.bak
           grep 'path = "\.\./busbarAI' headroom-hook/Cargo.toml
 

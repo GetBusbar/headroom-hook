@@ -109,16 +109,14 @@ jobs:
           ref: ${{ steps.ref.outputs.sha }}
           path: busbarAI
 
-      # headroom-hook's Cargo.toml currently declares busbar-plugin-sdk as an ABSOLUTE local path
-      # (/Users/matthew/Developer/busbarAI/busbarAI/crates/...) — a stopgap the crate's own
-      # Cargo.toml documents, pending busbarAI going public. Patch it to the sibling-relative path
-      # this job's checkout layout actually produces (same patch
-      # .github/workflows/docker-bundle.yml already carries for the same reason).
+      # Normalizes whatever busbarAI path this checkout's Cargo.toml carries onto the
+      # sibling-relative form this job's layout produces. A no-op when the manifest already uses
+      # `../busbarAI/crates/...`; .github/workflows/docker-bundle.yml carries the same step.
       - name: Patch headroom-hook's interim path dependencies for CI
         shell: bash
         run: |
           set -euo pipefail
-          sed -i.bak 's#/Users/matthew/Developer/busbarAI/busbarAI/crates#../busbarAI/crates#g' headroom-hook/Cargo.toml
+          sed -i.bak -E 's#path = "[^"]*/busbarAI/crates#path = "../busbarAI/crates#g' headroom-hook/Cargo.toml
           rm -f headroom-hook/Cargo.toml.bak
           grep 'path = "\.\./busbarAI' headroom-hook/Cargo.toml
 
