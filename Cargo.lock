@@ -875,7 +875,7 @@ dependencies = [
 [[package]]
 name = "headroom-core"
 version = "0.1.0"
-source = "git+https://github.com/headroomlabs-ai/headroom?tag=v0.33.0#28aa53dc7ca51e687cc719c3fe160f3be50c6570"
+source = "git+https://github.com/headroomlabs-ai/headroom?tag=v0.34.0#9fd5ae3d530b5d9eb9e9127e413235a5a3b2faf6"
 dependencies = [
  "aho-corasick",
  "blake3",
@@ -911,7 +911,7 @@ dependencies = [
 
 [[package]]
 name = "headroom-hook"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "base64 0.22.1",
  "busbar-api",
@@ -1301,9 +1301,9 @@ checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 
 [[package]]
 name = "libloading"
-version = "0.8.9"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d7c4b02199fee7c5d21a5ae7d8cfa79a6ef5bb2fc834d6e9058e89c825efdc55"
+checksum = "754ca22de805bb5744484a5b151a9e1a8e837d5dc232c2d7d8c2e3492edc8b60"
 dependencies = [
  "cfg-if",
  "windows-link",
