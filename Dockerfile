@@ -1,8 +1,8 @@
 # headroom-hook container image — DEPRECATED / NOT CURRENTLY BUILDABLE.
 #
 # This Dockerfile describes the RETIRED pre-dlopen-ABI architecture: a standalone
-# `headroom-hook` binary serving busbar's old Unix-socket hook wire. Since "Port
-# headroom-hook to busbar's signed dlopen plugin ABI" (commit c37b798), this crate
+# `headroom-hook` binary serving busbar's old Unix-socket hook wire. Since
+# headroom-hook became a signed dlopen plugin, this crate
 # builds ONLY a cdylib (`crate-type = ["cdylib", "rlib"]`, no `[[bin]]`, no `fn main`)
 # that busbar dlopen's in-process — there is no more standalone binary for this
 # Dockerfile's `COPY binaries/${TARGETARCH}/headroom-hook /headroom-hook` line to copy,

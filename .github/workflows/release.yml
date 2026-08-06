@@ -10,7 +10,7 @@
 #
 # REPLACES the old `release-headroom` workflow, which built a standalone binary for the
 # RETIRED Unix-socket transport (`headroom-hook` executable, triggered by a `headroom-v*` tag).
-# Since "Port headroom-hook to busbar's signed dlopen plugin ABI" (commit c37b798) this crate is
+# Since headroom-hook became a signed dlopen plugin, this crate is
 # `crate-type = ["cdylib", "rlib"]` only — no `[[bin]]`, no `fn main` — so that old workflow can no
 # longer build anything. This workflow builds the cdylib instead, packed the same way every other
 # first-party plugin's Release tarball is.

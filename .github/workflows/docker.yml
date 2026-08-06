@@ -1,4 +1,4 @@
-# STALE since "Port headroom-hook to busbar's signed dlopen plugin ABI" (commit c37b798): this
+# STALE since headroom-hook became a signed dlopen plugin: this
 # workflow builds a standalone `headroom-hook` BINARY for the RETIRED Unix-socket transport, but the
 # crate has been `crate-type = ["cdylib", "rlib"]` only since that port — no `[[bin]]`, no `fn main`
 # — so `cargo build --release` here can no longer produce a binary at all. `release.yml` is the real
@@ -13,8 +13,8 @@
 # NATIVE runners (no QEMU) then copied into a small distroless/cc image.
 #
 # DEPRECATED / CURRENTLY BROKEN: this workflow builds `target/<triple>/release/headroom-hook`,
-# a binary that no longer exists — since "Port headroom-hook to busbar's signed dlopen plugin
-# ABI" (commit c37b798) this crate is `crate-type = ["cdylib", "rlib"]` only (no `[[bin]]`, no
+# a binary that no longer exists. Since headroom-hook became a signed dlopen plugin, this crate
+# is `crate-type = ["cdylib", "rlib"]` only (no `[[bin]]`, no
 # `fn main`). `cargo build --release` here builds fine (the lib target), but there is no
 # `headroom-hook` executable to `file`/upload/COPY into the Dockerfile — this workflow would
 # fail partway through if it ran. The automatic `push: tags: v*` trigger has been REMOVED (see
