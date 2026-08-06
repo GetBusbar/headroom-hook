@@ -110,11 +110,10 @@ fn status_surfaces_headroom_core_ref() {
     assert_eq!(status["status"]["headroom_core_ref"], HEADROOM_CORE_REF);
 }
 
-/// PANIC CONTAINMENT (labeled fallback): we could not find/construct a genuinely panicking
-/// `TextCrusher` input in the vendored `headroom-core` v0.32.0-adjacent source (grepped
-/// `crates/headroom-core/src/transforms/text_crusher/` for `unwrap()`/`expect(`/`panic!`/raw
-/// indexing — none found in the compress path), so this test does NOT drive a real TextCrusher
-/// panic. Instead it exercises the EXACT SAME containment pattern `compress::run_transform` uses
+/// PANIC CONTAINMENT. The vendored `headroom-core` compress path has no `unwrap()`/`expect(`/
+/// `panic!`/raw indexing, so there is no input that makes `TextCrusher` itself panic and this test
+/// does not drive a real one. It exercises the EXACT SAME containment pattern
+/// `compress::run_transform` uses
 /// (`std::panic::catch_unwind(AssertUnwindSafe(|| ...)).unwrap_or_else(|_| fallback)`) with a
 /// closure that deliberately panics, proving the containment code itself degrades to the
 /// fallback value instead of propagating the panic — the property `run_transform` relies on.

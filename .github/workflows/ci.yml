@@ -2,21 +2,14 @@
 # instead of hand-copying build/test/signoff steps here — see that file for what actually runs, and
 # see webrequest-hook's / auth-oidc's own ci.yml for the sibling-repo convention this mirrors.
 #
-# Before this file existed, headroom-hook had NO pull_request- or push-triggered CI at all: only
-# release.yml (fires on a `v*` tag, builds + packs + publishes with no test step in between) and
-# docker.yml/docker-bundle.yml (tag-triggered or workflow_dispatch, no test step either). A broken
-# build could reach a real GitHub Release — the only gate was a human running `cargo test` locally
-# before merging (see 39af7ac's commit message, which says exactly this out loud). This closes that
-# gap the same way every other first-party plugin repo already does.
+# This is the pull_request/push gate. release.yml fires on a `v*` tag and
+# docker.yml/docker-bundle.yml are tag-triggered or manual, none of which run tests, so without this
+# workflow a broken build could reach a real GitHub Release untested.
 #
-# busbar_ref used to be pinned to the literal `dev`, NOT left at the reusable workflow's own default
-# (`1.5.0-dev`), because `1.5.0-dev` is the older, now-stale branch and the plugin ABI surface this
-# crate depends on lives on `dev`. That reasoning still holds for `dev` — but a hard-pinned `dev`
-# makes the qa gate LIE: a push to this repo's `qa` would build core's `dev`, report green, and tell
-# us nothing about whether this plugin actually works against the core release qa is staging. So
-# busbar_ref is now same-branch (`github.ref_name`), matching auth-github / auth-ldap / auth-oidc /
-# hashicorp-vault / store-mysql / store-postgres / webrequest-hook. On `dev` this is byte-identical
-# to the old pin; on `qa` it starts telling the truth.
+# busbar_ref is same-branch (`github.ref_name`), not a hard pin. A hard pin to `dev` would make the
+# qa gate lie: a push to this repo's `qa` would build core's `dev`, report green, and say nothing
+# about whether this plugin works against the core release qa is staging. Matches auth-github /
+# auth-ldap / auth-oidc / hashicorp-vault / store-mysql / store-postgres / webrequest-hook.
 name: ci
 
 on:

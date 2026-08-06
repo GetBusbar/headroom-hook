@@ -52,10 +52,9 @@ jobs:
           # produced since it became a dlopen-only cdylib (see docker.yml's own header) — dispatching
           # it here would guarantee a failing run on every real release for a deprecated image nobody
           # ships anymore. docker-bundle.yml (getbusbar/busbar-headroom) is the actual current "one
-          # container" release path — see README.md's "Two ways to run" — and until this fix it was
-          # never triggered by this workflow at all (its own `push: tags:` trigger can't fire either,
-          # for the same GITHUB_TOKEN recursion-guard reason release.yml needs the explicit dispatch
-          # below), so bundle images silently stopped publishing on every release.
+          # container" release path — see README.md's "Install and run" — and it needs this explicit
+          # dispatch: its own `push: tags:` trigger cannot fire, for the same GITHUB_TOKEN
+          # recursion-guard reason release.yml needs the dispatch below.
           gh workflow run docker-bundle.yml --ref "$tag" -f version="$new"
           gh workflow run release.yml       --ref "$tag"
           echo "::notice::tagged and republished headroom-hook $tag"

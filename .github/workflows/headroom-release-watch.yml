@@ -38,14 +38,12 @@ jobs:
   watch:
     runs-on: ubuntu-latest
     steps:
-      # headroom-hook's Cargo.toml declares busbar-plugin-sdk as `path = "../busbarAI/crates/..."`
-      # — a real sibling-relative path (see the `a61e7f8` fix), which means whatever checks this
-      # repo out MUST also check out a real `busbarAI` as an actual filesystem sibling. This job
-      # was checking out ONLY headroom-hook at the workspace root with no sibling at all — `../busbarAI`
-      # resolved to nothing, so `cargo build`/`cargo test` below failed immediately on every real
-      # (bump=yes) run. Fix: check both repos out into explicit sibling paths under the workspace,
-      # matching release.yml's own layout, and run every later step with
-      # `working-directory: headroom-hook` instead of the (implicit) workspace root.
+      # headroom-hook's Cargo.toml declares busbar-plugin-sdk as `path = "../busbarAI/crates/..."`,
+      # a sibling-relative path, so whatever checks this repo out MUST also check out a real
+      # `busbarAI` as an actual filesystem sibling or `cargo build`/`cargo test` below cannot
+      # resolve it. Both repos therefore go into explicit sibling paths under the workspace,
+      # matching release.yml's layout, and every later step runs with
+      # `working-directory: headroom-hook` rather than the workspace root.
       - name: Checkout headroom-hook
         uses: actions/checkout@v4
         with:

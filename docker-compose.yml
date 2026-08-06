@@ -11,7 +11,7 @@
 #
 #     docker run -d -p 8080:8080 -e ANTHROPIC_KEY -e BUSBAR_ADMIN_TOKEN getbusbar/busbar-headroom
 #
-# See README.md's "Two ways to run" section (and docker/bundle/Dockerfile /
+# See README.md's "Install and run" section (and docker/bundle/Dockerfile /
 # .github/workflows/docker-bundle.yml for how that image is built). This compose file
 # is left as historical reference only — do not trust it against the current code.
 #

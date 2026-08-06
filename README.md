@@ -81,8 +81,8 @@ Reproduce every number: see [`bench/README.md`](bench/README.md).
 
 Headroom is a **busbar plugin**: a signed cdylib busbar `dlopen`s in-process (busbar's
 plugin ABI). There is no standalone binary and no socket to wire up — busbar loads the
-library directly and calls it as an in-process rewrite gate. Two ways to get it
-running:
+library directly and calls it as an in-process rewrite gate. There are two ways to
+run it:
 
 ### 1. Bundled image (simplest — one container, zero config)
 
@@ -110,39 +110,6 @@ This image is distinct from `getbusbar/busbar` (busbarAI's own plugin-free image
 supersedes the old `getbusbar/headroom-hook` standalone image described later in this
 repo's history (that image predates busbar's dlopen plugin ABI and is no longer
 buildable — see the root `Dockerfile`'s header).
-
-### 2. Plugin drop-in (if you already run busbar)
-
-If you already have a busbar deployment — [`getbusbar/busbar`](https://github.com/GetBusbar/busbar)
-or your own build — install Headroom into it the same way you'd install any other
-first-party plugin:
-
-1. Grab the signed tarball for your platform from this repo's
-   [Releases](https://github.com/GetBusbar/headroom-hook/releases)
-   (`busbar-headroom-<arch>.tar.gz`).
-2. Drop it into busbar's plugin directory and enable plugins in your `config.yaml`:
-
-   ```yaml
-   plugins:
-     enabled: true
-     dir: /etc/busbar/plugins   # or wherever you dropped the tarball
-   ```
-3. Wire it in as a hook wherever you want compression — globally or per-pool:
-
-   ```yaml
-   hooks:                 # define the instance once…
-     headroom: { module: busbar-headroom, kind: gate, prompt: rw, timeout_ms: 50 }
-
-   pools:
-     default:
-       hooks: [headroom]  # …then reference it by bare name
-       members:
-         - model: claude
-   ```
-
-Because the tarball is signed with busbar's release key, it loads as first-party with
-zero extra trust configuration (`plugins.trust.allow_unsigned` is only needed for
-unsigned/dev builds).
 
 ### 2. Plugin drop-in (if you already run busbar)
 
@@ -303,10 +270,10 @@ pools:
     members: [ { model: claude-sonnet, weight: 1 } ]
 ```
 
-> **Status:** pool-scoped rewrite gates were not fired by the pre-1.5.0 engine this
-> plugin was built and benchmarked against (the transform pass was global-only at the
-> time), and on same-protocol passthrough the engine's pristine-bytes fast path can
-> skip the rewritten body — both found while building this POC and tracked upstream.
+> **Status:** pool-scoped rewrite gates were not fired by the pre-1.5.0 engine these
+> numbers were benchmarked against (the transform pass was global-only at the time),
+> and on same-protocol passthrough the engine's pristine-bytes fast path can skip the
+> rewritten body. Both are tracked upstream.
 > If your busbar build still has that limitation, A/B with two busbar instances (one
 > with an all-pools `pools.hooks` attach, one without) instead, which is how the numbers above
 > were measured. Check `busbar --version` / release notes for the fix.

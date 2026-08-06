@@ -14,13 +14,12 @@
 #
 # For "one container, zero config, busbar + headroom together" today, use
 # getbusbar/busbar-headroom instead (docker/bundle/Dockerfile,
-# .github/workflows/docker-bundle.yml) — see README.md's "Two ways to run" section.
+# .github/workflows/docker-bundle.yml) — see README.md's "Install and run" section.
 # Alternatively, release.yml's signed plugin tarball (drop into an existing busbar's
 # plugins.dir) is the other real release path — see README.md "Install and run".
-# Whether this standalone image concept is still worth reviving (e.g. as a from-source
-# dlopen sidecar loader) or should simply be deleted is a product call for a human to
-# make, not something fixed unilaterally here — this header only documents why the file
-# as it stands no longer describes anything buildable.
+# Whether the standalone image concept is worth reviving (e.g. as a from-source dlopen
+# sidecar loader) or should simply be deleted is still open; this header documents why
+# the file as it stands no longer describes anything buildable.
 #
 # ---- Everything below this point is the ORIGINAL (stale) socket-transport content,
 # ---- left as-is / historical reference. Do not trust it against the current code.

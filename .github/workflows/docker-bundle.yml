@@ -13,11 +13,8 @@ name: Docker (bundle)
 #
 # busbar itself is built FROM SOURCE from a sibling ../busbarAI checkout in this same CI run —
 # this repo already declares busbarAI as a path dependency for busbar-plugin-sdk (see Cargo.toml),
-# so the sibling-checkout layout is already the convention. The build mirrors EXACTLY what
-# busbarAI's own docker.yml used to do when it bundled headroom into its own image, before that
-# responsibility moved to this repo (see busbarAI commit ed61aae "ci/docker: stop bundling
-# headroom into busbar's own release and image" — its PARENT commit has the full original logic
-# this workflow was transcribed from): same PGO-mandatory fail-closed release build, same static
+# so the sibling-checkout layout is already the convention. The build matches busbarAI's own image
+# build for the same targets: same PGO-mandatory fail-closed release build, same static
 # musl target, same musl-native `rust:alpine` container trick for the cdylib (crt-static disabled
 # so `cdylib` output actually happens on aarch64-unknown-linux-musl, exact-ABI-matched runtime
 # libs extracted from the same container so dlopen() succeeds in a FROM-scratch image with no
@@ -28,10 +25,7 @@ name: Docker (bundle)
 #   - workflow_dispatch: publish a `test` tag only (or a specific version via the input) —
 #     end-to-end pipeline check without cutting a release.
 #
-# Needs real `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` secrets on THIS repo to push. As of this
-# workflow's authoring both are provisioned (`gh secret list --repo GetBusbar/headroom-hook`
-# shows DOCKERHUB_TOKEN + DOCKERHUB_USERNAME) — verify the push step yourself before relying on
-# it; it was not (and cannot be) exercised by the agent that authored this file.
+# Needs real `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` secrets on THIS repo to push.
 
 on:
   push:
@@ -83,23 +77,16 @@ jobs:
       - name: Checkout busbarAI (sibling — source of the busbar binary)
         uses: actions/checkout@v4
         with:
-          # NOT "GetBusbar/busbarAI" — that repo does not exist (confirmed via `gh repo list
-          # GetBusbar`; every other workflow in this repo, e.g. release.yml and
-          # headroom-release-watch.yml, already correctly uses GetBusbar/busbar). As authored this
-          # checkout 404'd, so this job could never get past its second step.
+          # NOT "GetBusbar/busbarAI" — the core repo is GetBusbar/busbar, which is what every
+          # other workflow here (release.yml, headroom-release-watch.yml) checks out too.
           repository: GetBusbar/busbar
           ref: ${{ env.BUSBARAI_REF }}
           path: busbarAI
 
-      # headroom-hook's Cargo.toml currently declares busbar-plugin-sdk (and its dev-dependency)
-      # as an ABSOLUTE local path (/Users/matthew/Developer/busbarAI/busbarAI/crates/...) — a
-      # stopgap documented in Cargo.toml pending busbarAI going public. Despite a comment
-      # elsewhere claiming this is already a sibling-relative path, it is NOT, as of this
-      # workflow's authoring (verified by reading the checked-out Cargo.toml directly) — so this
-      # step patches it for CI, exactly the workaround busbarAI's own release.yml used to carry
-      # before headroom-hook was (incorrectly, per that same verification) believed to no longer
-      # need it. Remove this step once headroom-hook's Cargo.toml itself switches to a real
-      # sibling-relative path (`../busbarAI/crates/...`).
+      # Tolerates a checkout whose Cargo.toml still carries an absolute local path for
+      # busbar-plugin-sdk (and its dev-dependency) instead of the sibling-relative
+      # `../busbarAI/crates/...` form, rewriting it to the layout this job checks out. A no-op
+      # once every branch built here uses the relative form; drop the step then.
       - name: Patch headroom-hook's interim path dependencies for CI
         run: |
           set -euo pipefail
@@ -127,9 +114,8 @@ jobs:
         working-directory: busbarAI
         env:
           # The busbar release ed25519 PUBLIC key, embedded at build time (plugin-sign's
-          # option_env!) — the comment on the pack step below always claimed this was baked in,
-          # but the env var was never actually set here, so the bundled busbar refused its own
-          # signed headroom plugin ("embeds no busbar release key", the smoke-test failure).
+          # option_env!). Without it the bundled busbar refuses its own signed headroom plugin
+          # ("embeds no busbar release key") and the smoke test fails.
           BUSBAR_RELEASE_PUBKEY: ${{ vars.BUSBAR_RELEASE_PUBKEY }}
           PGO_TARGET: ${{ matrix.target }}
           CC: musl-gcc
@@ -180,11 +166,9 @@ jobs:
           if-no-files-found: error
 
       # Named to match the `busbar-*` glob the `publish` job's download-artifact step filters on
-      # (it previously didn't, so this was uploaded twice — once per matrix arch — and never
-      # downloaded at all, silently breaking every publish at the "Arrange per-arch layout" step
-      # with `cp: cannot stat 'staged/providers-yaml/providers.yaml'`). The file itself doesn't
-      # vary by arch, so only the amd64 leg uploads it — the arm64 leg would otherwise collide on
-      # the same artifact name.
+      # so it is actually downloaded again in that job. The file itself doesn't vary by arch, so
+      # only the amd64 leg uploads it — the arm64 leg would otherwise collide on the same artifact
+      # name.
       - if: matrix.arch == 'amd64'
         uses: actions/upload-artifact@v4
         with:
@@ -296,8 +280,8 @@ jobs:
           pattern: busbar-*
           path: staged
 
-      # `pattern: busbar-*` can never match the `providers-yaml` artifact — the "Arrange" step's
-      # `cp staged/providers-yaml/providers.yaml` failed on every run until this explicit download.
+      # `pattern: busbar-*` can never match the `providers-yaml` artifact, so the "Arrange" step's
+      # `cp staged/providers-yaml/providers.yaml` needs this explicit download to find anything.
       - name: Stage providers.yaml into build context
         uses: actions/download-artifact@v4
         with:
@@ -369,9 +353,9 @@ jobs:
   # Proves the image `publish` just pushed actually WORKS, not just that it built: boots it
   # against a local mock upstream (no live provider key needed) and checks, over the real admin
   # API and a real chat request, that headroom is loaded AND genuinely compresses traffic — the
-  # same externally-observable proof tests/e2e_admin_api.rs already established for a bare
-  # binary, now against the packaged container every user actually pulls. Before this job existed
-  # the image had never been smoke-tested at all (see .github/scripts/docker-bundle-smoke-test/).
+  # same externally-observable proof tests/e2e_admin_api.rs establishes for a bare binary, now
+  # against the packaged container every user actually pulls (see
+  # .github/scripts/docker-bundle-smoke-test/).
   smoke-test:
     name: smoke test bundled image
     needs: publish

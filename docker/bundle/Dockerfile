@@ -32,11 +32,9 @@
 # workflow), which makes it a normally-dynamically-linked musl/C++ shared object instead of the
 # usual self-contained static-pie one. Bundling its exact runtime libs (built in the same
 # musl-native container, so the ABI matches) is what makes dlopen() succeed in a FROM-scratch
-# image that otherwise has no libc at all. This whole mechanism — the musl-native rust:alpine
-# build container, crt-static disabled, runtime-lib extraction — is ported verbatim from
-# busbarAI's git history (its Dockerfile/docker.yml used to bundle headroom this exact way,
-# before that responsibility moved to this repo; see busbarAI commit ed61aae's parent for the
-# original, already-solved implementation this was transcribed from).
+# image that otherwise has no libc at all. The mechanism — the musl-native rust:alpine build
+# container, crt-static disabled, runtime-lib extraction — is the same one busbarAI's own image
+# build uses for this cdylib.
 #
 # Run (zero-config quickstart — headroom active, one provider):
 #   docker run -d -p 8080:8080 \
@@ -54,13 +52,11 @@
 #   -v busbar-data:/var/lib/busbar   with governance.db_path: /var/lib/busbar/governance.db
 # Seed /tmp: busbar's plugin loader prefers a zero-disk Linux memfd load, but falls back to
 # private-temp-file staging (busbar-plugins-*/ under the OS temp dir) whenever memfd_create is
-# unavailable to the process — OBSERVED locally (colima/Docker Desktop on Apple Silicon, emulated
-# linux/arm64) while building and smoke-testing this image; not independently confirmed whether a
-# real GitHub Actions ubuntu runner hits the same fallback, but seeding /tmp costs nothing and
-# closes the gap either way. FROM scratch ships with no /tmp directory at all, so that fallback
-# used to fail closed with "No such file or directory" (and, before the `--chmod=1777` below was
-# added, with "Permission denied" — BuildKit's legacy builder was observed to silently drop the
-# sticky bit on a plain multi-stage COPY, so it's forced explicitly). A tiny busybox stage seeds a
+# unavailable to the process, which happens under emulated linux/arm64 on Apple Silicon among
+# others. FROM scratch ships with no /tmp directory at all, so that fallback fails closed with
+# "No such file or directory"; `--chmod=1777` below is explicit because BuildKit's legacy builder
+# can silently drop the sticky bit on a plain multi-stage COPY, giving "Permission denied"
+# instead. A tiny busybox stage seeds a
 # real, world-writable /tmp so the fallback path works wherever memfd isn't available, without
 # adding anything to the final image but the directory entry itself.
 FROM busybox:latest AS tmp-seed

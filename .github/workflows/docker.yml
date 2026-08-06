@@ -5,9 +5,8 @@
 # release workflow now (builds the cdylib, packs+signs it as a busbar plugin tarball).
 #
 # The automatic `push: tags: v*` trigger is REMOVED below so this doesn't fail on every release tag.
-# Kept as `workflow_dispatch` only, and NOT deleted outright: whether to revive this as a Docker
-# image build for the standalone-plugin-loaded-into-busbar use case (see busbar-headroom bundled
-# image work) or retire it entirely is a product call, not made unilaterally here.
+# It is kept as `workflow_dispatch` only, rather than deleted, pending a decision on whether to
+# revive it as a Docker image build for the standalone-plugin-loaded-into-busbar use case.
 #
 # Build the headroom-hook image for amd64 + arm64 and publish to Docker Hub,
 # tagged with the pushed vX.Y.Z tag and `latest`. Binaries are built on
@@ -21,12 +20,9 @@
 # fail partway through if it ran. The automatic `push: tags: v*` trigger has been REMOVED (see
 # below) so it stops firing (and failing) on every release tag; `workflow_dispatch` is kept as a
 # manual-only escape hatch, not deleted outright. NOTHING calls this automatically anymore:
-# headroom-release-publish.yml used to `gh workflow run docker.yml` after every merge to main
-# (dispatching a guaranteed-failing run on every real release, since this workflow was already
-# broken) — that call was retargeted to docker-bundle.yml instead, the actual current release
-# path. Use getbusbar/busbar-headroom (.github/workflows/docker-bundle.yml) instead — see
-# README.md's "Two ways to run" section. Fixing or retiring this file for good is a product call
-# for a human, not made unilaterally here.
+# headroom-release-publish.yml dispatches docker-bundle.yml, the actual current release path.
+# Use getbusbar/busbar-headroom (.github/workflows/docker-bundle.yml) instead — see README.md's
+# "Install and run" section.
 #
 # NOTE (see Dockerfile): on Linux, headroom-core's default tree links the ONNX
 # runtime at build time. The FIRST run of this workflow is the validation point

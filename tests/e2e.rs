@@ -8,11 +8,9 @@
 //! engine, and whose reply is parsed through the engine's own fail-closed `hooks::wire`
 //! normalizers.
 //!
-//! Ported from `busbarAI/crates/headroom-hook-plugin/tests/e2e.rs` (the placeholder plugin's e2e
-//! harness/style — its compression algorithm was fake, only the harness shape is mirrored here) and
-//! from the old socket hook's `src/tests/compress.rs` fixtures (`log_dump`), since a toy 2-word
-//! string never triggers BM25/TextCrusher's real compression path — `TextCrusher` itself passes
-//! short texts (<6 segments) through unchanged.
+//! The corpus fixtures (`log_dump`) are shared with `src/tests/compress.rs`: a toy 2-word string
+//! never triggers BM25/TextCrusher's real compression path, since `TextCrusher` passes short texts
+//! (<6 segments) through unchanged.
 
 use busbar_api::{
     Candidate, RoutingContext, RoutingDecision, RoutingPolicy, RoutingRequest, TransformOutcome,
@@ -31,8 +29,7 @@ use std::time::Duration;
 /// the cdylib to the top-level profile dir, only to `target/deps` — checking only `profile_dir`
 /// silently finds nothing even though the cdylib really was built, so every test below would
 /// no-op via this function's `None` return, appearing to pass without exercising a single line of
-/// the real cdylib. Same fix already applied to store-postgres-plugin's, auth-oidc-plugin's,
-/// webrequest-hook's, and busbarAI core's hook-test-plugin's equivalent `plugin_path()` helpers.
+/// the real cdylib.
 fn plugin_path() -> Option<std::path::PathBuf> {
     let candidate = (|| {
         let exe = std::env::current_exe().ok()?;
@@ -188,9 +185,8 @@ fn req_with_history(history: String, ask: &str) -> RoutingRequest<'static> {
         }),
         identity: None,
         // The DEFAULT (empty) declared-signal bag: this gate declares no request-phase signals, so
-        // the engine hands it exactly this — an empty bag — on every real request. Asserting the
-        // gate's behaviour on the default path is the point, so empty is the CORRECT fixture value,
-        // not a placeholder standing in for coverage that is missing.
+        // the engine hands it exactly this — an empty bag — on every real request, and the gate's
+        // behaviour on that default path is what these tests assert.
         signals: Default::default(),
     }
 }

@@ -62,8 +62,7 @@ const TEST_SIGNING_KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef
 /// Checks BOTH the uplifted `<profile_dir>/<name>` copy and the raw `<profile_dir>/deps/<name>`
 /// compiler output — a bare `cargo test` (what this repo's own CI runs) never uplifts, only
 /// `target/deps`, so checking only the former silently finds nothing even though the cdylib was
-/// really built. Same fix already applied to store-postgres-plugin's, auth-oidc-plugin's,
-/// webrequest-hook's, and busbarAI core's hook-test-plugin's equivalent `plugin_path()` helpers.
+/// really built.
 fn plugin_path() -> Option<PathBuf> {
     let candidate = (|| {
         let exe = std::env::current_exe().ok()?;
@@ -328,9 +327,9 @@ fn admin_api_installs_headroom_and_a_real_request_is_compressed_upstream() {
     //     — either per-pool (`pools.<p>.hooks:`) or, as here, via the reserved ALL-POOLS
     //     `pools.hooks:` list, which is exactly what the removed top-level `global_hooks:` lowers
     //     to. Same shape this repo's own `docker/bundle/config.yaml` and the docker-bundle smoke
-    //     test's config already carry (converted in 79be898).
-    // A global rewrite gate remains the deliberate wiring here (rather than a pool-scoped attach):
-    // it is a legitimate real deployment shape and the one this test has always exercised.
+    //     test's config carry.
+    // The gate is attached globally rather than pool-scoped: that is a real deployment shape, and
+    // the one this test exercises.
     let config_v1 = work.join("config-1.yaml");
     // 512 MiB request-body cap (`limits:` below): the install POST carries the packed cdylib as
     // base64, and a DEBUG-profile build of this plugin (what `cargo test` produces on CI) blows

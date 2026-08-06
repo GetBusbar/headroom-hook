@@ -1,6 +1,6 @@
 # Contributing to headroom-hook
 
-Thanks for your interest. This is a small, standalone Rust binary — a Busbar
+Thanks for your interest. This is a small Rust cdylib — a Busbar
 [hook](https://getbusbar.com/docs/hooks/) that compresses chat history with
 [headroom-core](https://github.com/headroomlabs-ai/headroom).
 
@@ -13,13 +13,13 @@ Thanks for your interest. This is a small, standalone Rust binary — a Busbar
 ## Build and test
 
 ```sh
-cargo build --release      # the shipped binary
+cargo build --release --lib   # the shipped cdylib
 cargo test                 # unit + wire tests
 cargo clippy --all-targets -- -D warnings   # lints must be clean
 cargo fmt --all            # format before committing
 ```
 
-The core (`src/compress.rs`, `src/main.rs`) stays lean; tests live in
+The core (`src/compress.rs`, `src/lib.rs`) stays lean; tests live in
 `src/tests/`. Keep it that way — a hook is read by the people deciding whether
 to trust it on their request path.
 
