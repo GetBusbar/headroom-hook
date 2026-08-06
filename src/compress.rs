@@ -247,7 +247,13 @@ pub fn run_transform(payload: &Value, knobs: &RwLock<Knobs>, metrics: &Mutex<Met
     let last = messages.len() - 1;
     for (i, m) in messages.iter().enumerate() {
         chars_before += m.text.len();
-        let text = if i == last {
+        let text = if i == last || m.role.eq_ignore_ascii_case("system") {
+            // The ask is kept verbatim, and so is a SYSTEM turn. On the dialects that carry the
+            // system prompt inside the turns array (openai, cohere, gemini, responses) it arrives
+            // here as an ordinary message, and compressing it means shredding the operator's own
+            // instructions against whatever the user happened to ask. On anthropic the system
+            // prompt is a separate body field this hook never sees, so without this the same
+            // deployment behaves differently depending on which dialect the client speaks.
             m.text.clone()
         } else {
             // PANIC CONTAINMENT: `TextCrusher` is third-party code on the request path. If it
@@ -272,7 +278,13 @@ pub fn run_transform(payload: &Value, knobs: &RwLock<Knobs>, metrics: &Mutex<Met
     } else {
         100.0 * (chars_before.saturating_sub(chars_after)) as f64 / chars_before as f64
     };
-    let committed = chars_before > 0 && savings_pct >= knobs_v.min_savings_pct;
+    // `chars_after < chars_before` is not implied by the percentage test: `min_savings_pct` is
+    // settable to 0.0, and `saturating_sub` clamps a NEGATIVE saving to 0.0, so at a zero bar both
+    // "compressed nothing" and "made it longer" satisfy `savings_pct >= 0.0`. Committing there
+    // reports a rewrite that achieved nothing while still paying its full cost: the engine replaces
+    // the request's whole messages array with this reply. Require an actual reduction.
+    let committed =
+        chars_before > 0 && chars_after < chars_before && savings_pct >= knobs_v.min_savings_pct;
 
     // Record metrics for this request (poison-tolerant; one short critical section).
     {

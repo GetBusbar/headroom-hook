@@ -5,10 +5,21 @@ use std::fs;
 
 fn main() {
     println!("cargo:rerun-if-changed=Cargo.lock");
+    // A read or parse failure stamps "unknown" rather than failing the build, because a source
+    // tree without a Cargo.lock is a legitimate way to build. But it is WARNED about: this value is
+    // reported through `status.headroom_core_ref` as build provenance, and an operator auditing
+    // which engine version is deployed cannot otherwise tell "genuinely unpinned" from "the build
+    // could not read its own lockfile".
     let r = fs::read_to_string("Cargo.lock")
         .ok()
         .and_then(|s| headroom_ref(&s))
-        .unwrap_or_else(|| "unknown".to_string());
+        .unwrap_or_else(|| {
+            println!(
+                "cargo:warning=headroom-hook: could not determine the headroom-core git ref from \
+                 Cargo.lock; status will report headroom_core_ref=\"unknown\""
+            );
+            "unknown".to_string()
+        });
     println!("cargo:rustc-env=HEADROOM_CORE_REF={r}");
 }
 

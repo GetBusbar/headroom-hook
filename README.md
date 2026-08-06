@@ -216,14 +216,24 @@ ways from that one source:
 - **Prometheus** — busbar's `/metrics/hooks` scrape renders the same metrics as standard text, with
   the metric **names verbatim** and an automatic `hook="headroom"` label.
 
-The names follow Headroom's own vocabulary where they map —
-`proxy_compression_ratio_by_strategy{strategy,content_type}`,
-`proxy_compression_rejected_by_token_check_total`, `proxy_passthrough_bytes_modified_total` — so a
-dashboard built against Headroom points at busbar and lights up. Alongside them, busbar-native
-per-pool extras: `tokens_saved_total`, `dollars_saved` (an estimate, priced off
-`price_udollars_per_ktok`, marked `estimated` with a confidence interval — busbar's `/usage` is the
-*measured* spend), `compress_latency_us` (a p50/p90/p99 histogram), and the request counters. Every
-series carries a `pool` label, so one process serving N pools shows N rows.
+The series emitted, named exactly as they appear on the scrape:
+
+- `headroom_requests_total` — requests this hook saw, per pool.
+- `headroom_tokens_input_total` — estimated input tokens seen.
+- `headroom_tokens_saved_total` — estimated tokens removed by a committed rewrite.
+- `headroom_overhead_ms_sum` / `_count` / `_min` / `_max` — the hook's own wall-clock overhead.
+  Counters and gauges, NOT a histogram: there are no quantile buckets to query.
+- `dollars_saved` — an estimate priced off `price_udollars_per_ktok`, not measured spend. busbar's
+  `/usage` is the measured figure; use that for anything billing-facing.
+
+Every series carries a `pool` label, so one process serving N pools shows N rows.
+
+Two caveats worth stating rather than discovering. The token and dollar figures are derived from a
+BYTE count divided by a chars-per-token constant, so on text that is not mostly ASCII (CJK, emoji,
+any script above the Latin range) they over-report by roughly the UTF-8 expansion factor. The
+savings PERCENTAGE is unaffected, since both sides of the ratio are counted the same way. And these
+are the names this hook emits; they are not Headroom's upstream vocabulary, so a dashboard built
+against Headroom's own metric names will not light up unmodified.
 
 ## Wire into busbar (fleet-wide)
 

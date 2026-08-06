@@ -108,6 +108,19 @@ fn status_surfaces_headroom_core_ref() {
     let h = Headroom::new(Knobs::default());
     let status = h.status();
     assert_eq!(status["status"]["headroom_core_ref"], HEADROOM_CORE_REF);
+    // ...and the constant is a REAL ref, not the silent-failure sentinel. Comparing the reported
+    // value against the constant that produced it cannot fail on its own: it passes just as
+    // happily on "unknown", which is what a build that could not read its own Cargo.lock stamps
+    // in. This is the assertion that notices.
+    assert_ne!(
+        HEADROOM_CORE_REF, "unknown",
+        "the build could not determine the headroom-core git ref, so status reports build \
+         provenance that is indistinguishable from genuinely unpinned"
+    );
+    assert!(
+        !HEADROOM_CORE_REF.trim().is_empty(),
+        "headroom_core_ref must carry something an operator can act on"
+    );
 }
 
 /// PANIC CONTAINMENT. The vendored `headroom-core` compress path has no `unwrap()`/`expect(`/
