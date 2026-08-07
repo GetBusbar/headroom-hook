@@ -126,6 +126,16 @@ jobs:
           # dlopen ABI seam against a sibling busbar checkout, on the full target matrix. Only the
           # second one is the gate this repo actually relies on.
           #
+          # WHEN THIS ACTUALLY TAKES EFFECT: this workflow is `on: schedule`, and GitHub loads a
+          # scheduled workflow from the DEFAULT BRANCH. So the version of this file that runs is
+          # whatever is on `main`, NOT what is on `dev` — a dispatch added here does nothing until
+          # `main` moves. Observed directly: bump `071a8a7` still landed on dev with no CI run,
+          # because the run executing that push was `main`'s copy of this file.
+          #
+          # Until then, a bump reaching dev untested is caught by the release process, which
+          # verifies every repo has a CI run on the exact SHA that is on the branch rather than
+          # trusting "the last run was green".
+          #
           # Non-fatal: the bump is already pushed, so failing here would report the bump as failed
           # when it succeeded. A missed dispatch is visible as a commit with no run.
           gh workflow run ci.yml --repo "${GITHUB_REPOSITORY}" --ref dev \
