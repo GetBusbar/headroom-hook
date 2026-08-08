@@ -20,10 +20,14 @@
 
 listen: "0.0.0.0:8080"
 
+# Each identity provider is DEFINED once here and REFERENCED by bare name from auth below.
+# busbar 1.5.3 retired the inline module form and refuses to boot a config still carrying it.
+identity-providers:
+  admin-tokens: { module: admin-tokens, token: { env: BUSBAR_ADMIN_TOKEN } }
+
 auth:
   chain: []                                            # open data-plane relay — see the note above
-  admin_auth:
-    - admin-tokens: { token: { env: BUSBAR_ADMIN_TOKEN } }
+  admin_auth: [admin-tokens]
 
 providers:
   anthropic:
@@ -33,10 +37,19 @@ models:
   claude:
     provider: anthropic
 
+# Each hook instance is likewise DEFINED once here and REFERENCED by bare name from a pool.
+# busbar 1.5.3 retired the inline hook-instance form that used to sit under `pools.*.hooks`.
+hooks:
+  busbar-headroom:
+    module: busbar-headroom
+    kind: gate
+    prompt: rw
+    timeout_ms: 50
+
 pools:
   default:
     hooks:
-      - { module: busbar-headroom, kind: gate, prompt: rw, timeout_ms: 50 }
+      - busbar-headroom
     members:
       - model: claude
 
