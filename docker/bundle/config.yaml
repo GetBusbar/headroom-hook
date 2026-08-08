@@ -15,18 +15,40 @@
 # beyond a quickstart, mount your own config.yaml over this path — see busbar's own docs for the
 # full annotated walkthrough (providers, pools, auth, groups, hooks) to build one from. A mounted
 # config.yaml REPLACES this file entirely (standard Docker bind-mount override): if you want
-# headroom wired into your own config, copy the `plugins:`, `hooks:` and `pools.*.hooks` blocks
-# below into it — the tarball at /etc/busbar/plugins/busbar-headroom.tar.gz is still there either
-# way.
+# headroom wired into your own config, copy the `plugins:` and `pools.*.hooks` blocks below into
+# it — the tarball at /etc/busbar/plugins/busbar-headroom.tar.gz is still there either way.
 
 listen: "0.0.0.0:8080"
 
+# WHERE admin-API config mutations persist. busbar 1.5.3 made a mutable config (config.locked:
+# false, the default) REFUSE TO BOOT unless its overlay backend is writable, and the default
+# backend is `busbar-overlay.json` NEXT TO the resolved config.yaml. In this image that is
+# /etc/busbar/, which a FROM-scratch layer gives to root while the process runs as uid 65532, so
+# the default path is not writable and busbar exits 1 before it ever listens:
+#
+#   [error] config is mutable (config.locked: false) but the overlay backend
+#   '/etc/busbar/busbar-overlay.json' is not writable (is the config directory read-only?)
+#
+# /tmp IS writable here (the Dockerfile seeds it 1777 from a busybox stage for the plugin
+# loader's temp-staging fallback), so the overlay is pointed at it. Admin-API config changes
+# then persist across a `docker restart` of this container, but NOT across `docker rm`. For
+# changes that outlive the container, mount a volume and point the overlay into it, e.g.
+#   docker run -v busbar-data:/var/lib/busbar ...   with  config.overlay.file:
+#   /var/lib/busbar/busbar-overlay.json  in a config.yaml you mount over this one.
+# For an immutable/GitOps posture instead, set `config.locked: true` (admin-API config
+# mutations are then refused at runtime and no overlay is needed at all).
+config:
+  overlay:
+    file: /tmp/busbar-overlay.json
+
+# Each identity provider is DEFINED once here and REFERENCED by bare name from auth below.
+# busbar 1.5.3 retired the inline module form and refuses to boot a config still carrying it.
 identity-providers:
   admin-tokens: { module: admin-tokens, token: { env: BUSBAR_ADMIN_TOKEN } }
 
 auth:
   chain: []                                            # open data-plane relay — see the note above
-  admin_auth: [admin-tokens]                           # referenced by name from the block above
+  admin_auth: [admin-tokens]
 
 providers:
   anthropic:
@@ -36,14 +58,19 @@ models:
   claude:
     provider: anthropic
 
-# Hooks are DEFINED ONCE here (the name is the instance, `module:` is the plugin behind it) and
-# REFERENCED BY BARE NAME from the pool below.
+# Each hook instance is likewise DEFINED once here and REFERENCED by bare name from a pool.
+# busbar 1.5.3 retired the inline hook-instance form that used to sit under `pools.*.hooks`.
 hooks:
-  headroom: { module: busbar-headroom, kind: gate, prompt: rw, timeout_ms: 50 }
+  busbar-headroom:
+    module: busbar-headroom
+    kind: gate
+    prompt: rw
+    timeout_ms: 50
 
 pools:
   default:
-    hooks: [headroom]
+    hooks:
+      - busbar-headroom
     members:
       - model: claude
 

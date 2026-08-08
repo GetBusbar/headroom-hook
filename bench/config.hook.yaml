@@ -1,7 +1,6 @@
 # Hook phase: identical to config.baseline.yaml PLUS the Headroom `kind: hook` dlopen plugin,
-# registered exactly as the busbar docs recommend (docs/hooks.md, docs/plugins.md): a named
-# prompt:rw rewrite gate attached to every pool via the reserved `pools.hooks:` list, at
-# target_ratio 0.5 / min_savings_pct 10, with a timeout + on_error
+# registered exactly as the busbar docs recommend (docs/hooks.md, docs/plugins.md): an all-pools
+# prompt:rw rewrite gate at target_ratio 0.5 / min_savings_pct 10, with a timeout + on_error
 # fail-open equivalent to the old socket-hook deadline. Busbar loads the plugin IN-PROCESS (dlopen)
 # from `plugins.dir` — there is no separate hook container or Unix-socket volume anymore; one
 # busbar container serves both phases.
@@ -15,19 +14,27 @@ listen: "0.0.0.0:8080"
 auth: { chain: [] }
 providers: { mock: { api_key: { env: BENCH_MOCK_KEY } } }
 models: { bench-model: { provider: mock, max_concurrent: 256 } }
-pools:
-  hooks: [headroom]                     # the reserved all-pools attach (was `global_hooks:`)
-  bench-pool: { members: [ { model: bench-model } ] }
+# busbar 1.5.3 REMOVED the top-level `global_hooks:` list this file used to carry. A hook instance
+# is now DEFINED once in the top-level `hooks:` map and REFERENCED by bare name; the reserved
+# `pools.hooks:` key attaches a name to ALL pools, which is what "global" means now. The old shape
+# made busbar refuse to boot outright, so this bench measured nothing against 1.5.3.
 hooks:
-  headroom:
+  busbar-headroom:
     module: busbar-headroom
     kind: gate
     prompt: rw
     timeout_ms: 25
     on_error: nothing
     settings: { target_ratio: 0.5, min_savings_pct: 10 }
+pools:
+  hooks: [busbar-headroom]
+  bench-pool: { members: [ { model: bench-model } ] }
 plugins:
   enabled: true
   dir: /etc/busbar/plugins
   trust: { allow_unsigned: true }
-advanced: { response_headers: { server_timing: true } }
+# busbar 1.5.3 DELETED the top-level `observability:` block. The Server-Timing header this bench
+# reads busbar's own added latency from is now an opt-in toggle under `advanced.response_headers`.
+advanced:
+  response_headers:
+    server_timing: true

@@ -146,9 +146,17 @@ first-party plugin:
      hooks: [headroom]       # the reserved all-pools attach (or list it per-pool)
    ```
 
-Because the tarball is signed with busbar's release key, it loads as first-party with
-no extra trust configuration (`plugins.trust.allow_unsigned` is only needed for
-unsigned/dev builds).
+The tarball is signed with busbar's release key, so in principle it loads as first-party
+with no extra trust configuration. In practice busbar 1.5.3's own released binaries embed
+no release public key, so they refuse every first-party plugin with
+
+    manifest claims first-party publisher 'busbar' but this build embeds no busbar
+    release key, so it cannot be verified
+
+Until that is fixed upstream you also need `plugins.trust.allow_unsigned: true`, and
+busbar will then log a per-plugin `WARN plugin validated as UNVERIFIED`. That is a busbar
+packaging defect rather than a property of this tarball; tracked at
+https://github.com/GetBusbar/busbar/issues/52.
 
 ### Build from source
 
