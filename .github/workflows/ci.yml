@@ -30,4 +30,9 @@ jobs:
       plugin_kind: hook
       plugin_alias: headroom
       service: none
-      busbar_ref: ${{ github.ref_name }} # same-branch: qa builds core qa, dev builds core dev (no stale main/tag)
+      busbar_ref: ${{ github.base_ref || github.ref_name }}
+      # base_ref FIRST: on a pull_request `github.ref_name` is '<number>/merge', not a branch
+      # name, so this asked busbar for a branch called '5/merge' and the sibling checkout died
+      # with an unreadable git error on EVERY pull request to this repo.
+      # Same-branch intent is unchanged: qa builds core qa, dev builds core dev, never a
+      # stale main or tag.
