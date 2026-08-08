@@ -20,6 +20,27 @@
 
 listen: "0.0.0.0:8080"
 
+# WHERE admin-API config mutations persist. busbar 1.5.3 made a mutable config (config.locked:
+# false, the default) REFUSE TO BOOT unless its overlay backend is writable, and the default
+# backend is `busbar-overlay.json` NEXT TO the resolved config.yaml. In this image that is
+# /etc/busbar/, which a FROM-scratch layer gives to root while the process runs as uid 65532, so
+# the default path is not writable and busbar exits 1 before it ever listens:
+#
+#   [error] config is mutable (config.locked: false) but the overlay backend
+#   '/etc/busbar/busbar-overlay.json' is not writable (is the config directory read-only?)
+#
+# /tmp IS writable here (the Dockerfile seeds it 1777 from a busybox stage for the plugin
+# loader's temp-staging fallback), so the overlay is pointed at it. Admin-API config changes
+# then persist across a `docker restart` of this container, but NOT across `docker rm`. For
+# changes that outlive the container, mount a volume and point the overlay into it, e.g.
+#   docker run -v busbar-data:/var/lib/busbar ...   with  config.overlay.file:
+#   /var/lib/busbar/busbar-overlay.json  in a config.yaml you mount over this one.
+# For an immutable/GitOps posture instead, set `config.locked: true` (admin-API config
+# mutations are then refused at runtime and no overlay is needed at all).
+config:
+  overlay:
+    file: /tmp/busbar-overlay.json
+
 # Each identity provider is DEFINED once here and REFERENCED by bare name from auth below.
 # busbar 1.5.3 retired the inline module form and refuses to boot a config still carrying it.
 identity-providers:

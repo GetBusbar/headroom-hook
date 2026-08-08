@@ -17,11 +17,16 @@ name: Docker (bundle)
 # busbarAI's own docker.yml used to do when it bundled headroom into its own image, before that
 # responsibility moved to this repo (see busbarAI commit ed61aae "ci/docker: stop bundling
 # headroom into busbar's own release and image" — its PARENT commit has the full original logic
-# this workflow was transcribed from): same PGO-mandatory fail-closed release build, same static
-# musl target, same musl-native `rust:alpine` container trick for the cdylib (crt-static disabled
-# so `cdylib` output actually happens on aarch64-unknown-linux-musl, exact-ABI-matched runtime
-# libs extracted from the same container so dlopen() succeeds in a FROM-scratch image with no
-# libc at all).
+# this workflow was transcribed from): same PGO-mandatory fail-closed release build, same
+# musl-native `rust:alpine` container trick, exact-ABI-matched runtime libs extracted from the
+# same container so dlopen() succeeds in a FROM-scratch image with no libc at all.
+#
+# ONE DELIBERATE DIVERGENCE from busbarAI's own image: busbar is built here with crt-static
+# DISABLED, so the bundled binary is dynamically linked against musl rather than static-pie. A
+# static musl binary cannot dlopen() anything, which meant every bundle published before this
+# change exited 1 at startup with "Dynamic loading not supported" and never loaded the plugin it
+# exists to preload. busbarAI's image can stay static because it ships plugin-free; this one
+# cannot. See the container build step and the boot gate in the publish job.
 #
 # Triggers:
 #   - v* tags: publish with X.Y.Z + latest.
@@ -58,9 +63,9 @@ permissions:
   attestations: write
 
 jobs:
-  # Static musl busbar binary (PGO) + this repo's headroom-hook cdylib, built together per-arch
-  # on native runners (no QEMU) so the cdylib's runtime libs are extracted from the SAME
-  # musl-native container the cdylib itself was built in (exact ABI match).
+  # Dynamic musl busbar binary (PGO) + this repo's headroom-hook cdylib, built together per-arch
+  # on native runners (no QEMU) in ONE musl-native container, so the binary, the cdylib and the
+  # extracted runtime libs all come from the same musl userland (exact ABI match).
   build-binaries:
     name: musl ${{ matrix.arch }}
     runs-on: ${{ matrix.os }}
@@ -107,57 +112,146 @@ jobs:
           rm -f headroom-hook/Cargo.toml.bak
           grep 'path = "\.\./busbarAI' headroom-hook/Cargo.toml
 
-      - name: Install musl toolchain
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
-
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
 
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: busbarAI
           key: ${{ matrix.target }}
 
-      # PGO release build of busbar itself (scripts/pgo-build.sh, from the sibling busbarAI
-      # checkout): instrumented build -> on-host training -> optimized build. FAIL-CLOSED: PGO is
-      # MANDATORY, matching busbarAI's own docker.yml/release.yml for its release binaries — this
-      # bundled image's busbar is equivalently optimized, not a naive debug/plain-release build.
-      - name: Build busbar (PGO, required/fail-closed)
+      # Built on the HOST (a plain build tool that only has to run on the runner, never ship), and
+      # built BEFORE the musl-native container step below: that container runs as root and writes
+      # root-owned directories into busbarAI/target, which a later host `cargo build` in the same
+      # workspace cannot always write through. Ordering it first sidesteps that entirely.
+      - name: Build busbar-plugin-pack (host target, build tool only)
         working-directory: busbarAI
-        env:
-          # The busbar release ed25519 PUBLIC key, embedded at build time (plugin-sign's
-          # option_env!) — the comment on the pack step below always claimed this was baked in,
-          # but the env var was never actually set here, so the bundled busbar refused its own
-          # signed headroom plugin ("embeds no busbar release key", the smoke-test failure).
-          BUSBAR_RELEASE_PUBKEY: ${{ vars.BUSBAR_RELEASE_PUBKEY }}
-          PGO_TARGET: ${{ matrix.target }}
-          CC: musl-gcc
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
-          # See busbarAI's own docker.yml for why: jemalloc-sys's autoconf `configure` misreads
-          # the gnu-build/musl-host triplet as cross-compiling and defaults its atomics probes to
-          # "no" without this seed, even though every atomics backend compiles+links fine here.
-          je_cv_c11_atomics: "yes"
-          je_cv_gcc_atomic_atomics: "yes"
-          je_cv_gcc_u8_atomic_atomics: "yes"
-          je_cv_gcc_sync_atomics: "yes"
-          je_cv_gcc_u8_sync_atomics: "yes"
+        run: cargo build --release -p busbar-plugin-pack
+
+      # scripts/pgo-build.sh sets RUSTFLAGS itself for both of its cargo phases, and a RUSTFLAGS
+      # set in the environment would simply be overridden by it (cargo gives the env var
+      # precedence over config-file rustflags, and the script's own assignment wins over ours).
+      # busbar has to be built with crt-static DISABLED here (see the next step for why), so the
+      # script is patched to append an opt-in extra-flags variable to both phases. The patch is
+      # asserted to have applied, so an upstream rewording of those lines fails the build loudly
+      # instead of silently producing a static binary that cannot dlopen anything.
+      - name: Let scripts/pgo-build.sh accept extra RUSTFLAGS
+        working-directory: busbarAI
         run: |
           set -euo pipefail
-          scripts/pgo-build.sh
-          file "target/pgo/${{ matrix.target }}/release/busbar"
-          if ldd "target/pgo/${{ matrix.target }}/release/busbar" 2>&1 | grep -qv 'not a dynamic\|statically linked'; then
-            echo "binary is dynamically linked; refusing to ship in FROM scratch" && exit 1
+          # shellcheck disable=SC2016  # the $-expressions are what we are WRITING into the script
+          sed -i \
+            -e 's|RUSTFLAGS="-Cprofile-generate=$PROF_DIR"|RUSTFLAGS="-Cprofile-generate=$PROF_DIR ${PGO_EXTRA_RUSTFLAGS:-}"|' \
+            -e 's|RUSTFLAGS="-Cprofile-use=$MERGED"|RUSTFLAGS="-Cprofile-use=$MERGED ${PGO_EXTRA_RUSTFLAGS:-}"|' \
+            scripts/pgo-build.sh
+          n="$(grep -c 'PGO_EXTRA_RUSTFLAGS' scripts/pgo-build.sh)"
+          if [ "$n" -ne 2 ]; then
+            echo "::error::expected to patch both pgo-build.sh RUSTFLAGS phases, patched $n" >&2
+            exit 1
           fi
+          grep -n 'RUSTFLAGS=' scripts/pgo-build.sh
+
+      # ONE musl-native `rust:alpine` container builds BOTH halves of this image: busbar itself
+      # (PGO, from the sibling busbarAI checkout) and this repo's headroom cdylib. They used to be
+      # built separately, busbar on the Ubuntu host against `musl-tools` and the cdylib in Alpine,
+      # and that split was the reason this image never worked:
+      #
+      #   * The host build produced a FULLY STATIC musl busbar. A static musl binary contains no
+      #     dynamic loader, so its dlopen() is a stub that always fails. Every published bundle
+      #     died at boot with "failed to load plugin 'busbar-headroom': Dynamic loading not
+      #     supported" - i.e. the one thing this image exists to do could never happen. Verified
+      #     by running the published getbusbar/busbar-headroom:2.0.3 and :2.0.4 images directly.
+      #   * Even built dynamically, a busbar linked against Ubuntu's musl-tools musl and a cdylib
+      #     linked against Alpine's musl would be carrying two different libcs into one
+      #     from-scratch image. Building both in the SAME container makes the ABI match by
+      #     construction, which is the identical argument the cdylib-only step already made for
+      #     its extracted runtime libs.
+      #
+      # So: crt-static disabled for both, one apk userland, one set of extracted runtime libs.
+      #
+      # The two reasons the cdylib half already needed Alpine, ported verbatim from busbarAI's own
+      # docker.yml, still stand and now apply to busbar too:
+      #   1. headroom-core pulls in `tokenizers` -> `esaxx-rs`, which needs a C++ compiler. The
+      #      Ubuntu host's `musl-tools` package provides `musl-gcc` (C only), no musl-targeted
+      #      C++ toolchain. Alpine ships a real musl-native g++.
+      #   2. aarch64-unknown-linux-musl does not support `crate-type = ["cdylib"]` under Rust's
+      #      DEFAULT (crt-static-on) linking for this target: the build silently drops the cdylib
+      #      output. `-C target-feature=-crt-static` fixes it but switches to DYNAMIC linking
+      #      against musl's libc/libgcc_s/libstdc++, which a FROM-scratch image does not otherwise
+      #      contain, hence the extracted runtime libs. Applied uniformly to both arches (same
+      #      judgment call busbarAI made): x86_64-musl's cdylib support was never cleanly
+      #      confirmed either way, so the proven mechanism is used for both rather than assuming.
+      #
+      # PGO stays MANDATORY and fail-closed (see the marker gate below), matching busbarAI's own
+      # docker.yml/release.yml - this image's busbar is equivalently optimized, not a naive
+      # release build. bash/python3/curl/procps are what pgo-build.sh's training phase needs on
+      # top of the cdylib build's own apk set. No --target is passed: inside this container the
+      # HOST triple already IS the musl triple, so cargo's plain host build is the musl build and
+      # the deterministic output path is target/pgo/release/busbar.
+      - name: Build busbar (PGO, dynamic musl) + headroom cdylib + runtime libs (one container)
+        run: |
+          set -euo pipefail
+          mkdir -p headroom-libs busbar-out
+          docker run --rm \
+            -e BUSBAR_RELEASE_PUBKEY \
+            -v "$PWD/busbarAI":/src/busbarAI \
+            -v "$PWD/headroom-hook":/src/headroom-hook \
+            -v "$PWD/headroom-libs":/libs \
+            -v "$PWD/busbar-out":/bb \
+            rust:alpine sh -exc '
+              apk add --no-cache musl-dev sqlite-dev pkgconfig gcc g++ git perl make bash python3 curl procps
+              export CARGO_HOME=/tmp/cargo-home
+              cd /src/busbarAI
+              PGO_EXTRA_RUSTFLAGS="-C target-feature=-crt-static" bash scripts/pgo-build.sh
+              cp target/pgo/release/busbar /bb/busbar
+              cp target/pgo/release/busbar.pgo-verified /bb/busbar.pgo-verified
+              cd /src/headroom-hook
+              RUSTFLAGS="-C target-feature=-crt-static" cargo build --release
+              cp target/release/libheadroom_hook.so /libs/libheadroom_hook.so
+              cp /usr/lib/libstdc++.so.6 /usr/lib/libgcc_s.so.1 /libs/
+              # BOTH musl names as REAL files: ld-musl-<arch>.so.1 is busbar PT_INTERP (without it
+              # the kernel cannot exec the binary at all and reports a misleading "permission
+              # denied"), libc.musl-<arch>.so.1 is the DT_NEEDED soname. In Alpine the second is a
+              # symlink to the first, and a symlink does not survive a CI artifact round trip.
+              cp /lib/ld-musl-*.so.1 /libs/
+              cp /lib/libc.musl-*.so.1 /libs/
+              chmod -R a+rwX /libs /bb
+            '
+          ls -l headroom-libs busbar-out
+        env:
+          # The busbar release ed25519 PUBLIC key, embedded at build time (plugin-sign's
+          # option_env!) so the bundled busbar accepts its own signed headroom plugin as
+          # first-party rather than refusing it with "embeds no busbar release key".
+          BUSBAR_RELEASE_PUBKEY: ${{ vars.BUSBAR_RELEASE_PUBKEY }}
+        shell: bash
+
+      # POSITIVE LINKAGE GATE. This inverts the assertion this workflow used to make. It used to
+      # refuse a dynamically linked binary; it now refuses a STATIC one, because a static musl
+      # busbar cannot dlopen the plugin this image exists to preload. Asserting the PT_INTERP
+      # explicitly (rather than just "not static") also catches the case where the loader name
+      # changes and the Dockerfile stops carrying the right file.
+      - name: Verify busbar is dynamically linked and names the musl loader
+        run: |
+          set -euo pipefail
+          file busbar-out/busbar
+          if ! file busbar-out/busbar | grep -q 'dynamically linked'; then
+            echo "::error::busbar is not dynamically linked - it cannot dlopen the headroom plugin, which is the entire point of this image" >&2
+            exit 1
+          fi
+          interp="$(readelf -l busbar-out/busbar | sed -n 's/.*interpreter: \(.*\)\]/\1/p')"
+          echo "PT_INTERP=$interp"
+          case "$interp" in
+            /lib/ld-musl-*.so.1) : ;;
+            *) echo "::error::unexpected PT_INTERP '$interp'; the Dockerfile carries /lib/ld-musl-<arch>.so.1 and nothing else" >&2; exit 1 ;;
+          esac
+          test -f "headroom-libs/$(basename "$interp")" \
+            || { echo "::error::the loader '$interp' this binary needs was not extracted into headroom-libs" >&2; exit 1; }
 
       # POSITIVE PGO GATE — same marker assertion busbarAI's own workflows use, so a non-PGO
       # binary can never ship in this image either.
       - name: Verify PGO was applied (marker gate)
-        working-directory: busbarAI
         run: |
           set -euo pipefail
-          marker="target/pgo/${{ matrix.target }}/release/busbar.pgo-verified"
+          marker="busbar-out/busbar.pgo-verified"
           if [ ! -s "$marker" ]; then
             echo "::error::PGO proof marker missing or empty at $marker - refusing to ship a non-PGO binary" >&2
             exit 1
@@ -176,7 +270,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: busbar-${{ matrix.arch }}
-          path: busbarAI/target/pgo/${{ matrix.target }}/release/busbar
+          path: busbar-out/busbar
           if-no-files-found: error
 
       - uses: actions/upload-artifact@v4
@@ -187,45 +281,6 @@ jobs:
           name: providers-yaml
           path: busbarAI/providers.yaml
           if-no-files-found: error
-
-      # ── headroom-hook cdylib, built inside a musl-native `rust:alpine` container — ported
-      # verbatim from busbarAI's own docker.yml (see that file's history for the full rationale):
-      #   1. headroom-core pulls in `tokenizers` -> `esaxx-rs`, which needs a C++ compiler. The
-      #      Ubuntu host's `musl-tools` package provides `musl-gcc` (C only) — no musl-targeted
-      #      C++ toolchain. Alpine ships a real musl-native g++.
-      #   2. aarch64-unknown-linux-musl does not support `crate-type = ["cdylib"]` under Rust's
-      #      DEFAULT (crt-static-on) linking for this target — the build silently drops the
-      #      cdylib output. `RUSTFLAGS="-C target-feature=-crt-static"` fixes it but switches to
-      #      DYNAMIC linking against musl's libc/libgcc_s/libstdc++, which a FROM-scratch image
-      #      does not otherwise contain — so the exact matching runtime libs (from the SAME
-      #      musl/gcc userland the plugin was linked against) must be extracted from this same
-      #      build container and bundled (see the Dockerfile). Applied uniformly to both arches
-      #      (same judgment call busbarAI made): x86_64-musl's cdylib support was never cleanly
-      #      confirmed either way, so the proven mechanism is used for both rather than assuming.
-      - name: Build headroom-hook cdylib + extract matching runtime libs (musl-native container)
-        run: |
-          set -euo pipefail
-          mkdir -p headroom-libs
-          docker run --rm \
-            -v "$PWD/headroom-hook":/src/headroom-hook \
-            -v "$PWD/busbarAI":/src/busbarAI:ro \
-            -v "$PWD/headroom-libs":/out \
-            rust:alpine sh -exc '
-              apk add --no-cache musl-dev sqlite-dev pkgconfig gcc g++ git perl make
-              export CARGO_HOME=/tmp/cargo-home
-              cd /src/headroom-hook
-              RUSTFLAGS="-C target-feature=-crt-static" cargo build --release
-              cp target/release/libheadroom_hook.so /out/libheadroom_hook.so
-              cp /usr/lib/libstdc++.so.6 /usr/lib/libgcc_s.so.1 /out/
-              cp /lib/libc.musl-*.so.1 /out/
-              chmod -R a+rwX /out
-            '
-          ls -l headroom-libs
-        shell: bash
-
-      - name: Build busbar-plugin-pack (host target, build tool only)
-        working-directory: busbarAI
-        run: cargo build --release -p busbar-plugin-pack
 
       # Same PUBLIC/PRIVATE first-party signing scheme as busbarAI's own release/docker
       # pipelines: BUSBAR_SIGN_KEY (this repo's secret, if provisioned) signs the manifest; the
@@ -269,6 +324,7 @@ jobs:
             headroom-libs/libstdc++.so.6
             headroom-libs/libgcc_s.so.1
             headroom-libs/libc.musl-*.so.1
+            headroom-libs/ld-musl-*.so.1
           if-no-files-found: error
 
       - uses: actions/upload-artifact@v4
@@ -309,6 +365,14 @@ jobs:
           mv staged/busbar-headroom-arm64/busbar-headroom-arm64.tar.gz plugins/arm64/busbar-headroom.tar.gz
           mv staged/busbar-headroom-libs-amd64/* plugins/amd64/lib/
           mv staged/busbar-headroom-libs-arm64/* plugins/arm64/lib/
+          # actions/upload-artifact does not preserve the executable bit (which is exactly why the
+          # busbar binary above already needs an explicit chmod). ld-musl-<arch>.so.1 is the
+          # program INTERPRETER, and the kernel refuses to exec a binary whose interpreter is not
+          # executable - reporting a bare "exec /busbar: permission denied" that points at the
+          # wrong file entirely. Observed while reproducing this locally; restore the bit for all
+          # of them rather than only the loader.
+          chmod +x plugins/amd64/lib/* plugins/arm64/lib/*
+          ls -l plugins/amd64/lib plugins/arm64/lib
 
       - uses: docker/setup-buildx-action@v3
 
@@ -341,6 +405,59 @@ jobs:
             org.opencontainers.image.url=https://getbusbar.com
             org.opencontainers.image.documentation=https://github.com/GetBusbar/headroom-hook
             org.opencontainers.image.licenses=Apache-2.0
+
+      # BOOT GATE, and the reason this workflow exists in its current shape. Every previously
+      # published bundle built green and was completely non-functional: the busbar inside it could
+      # not dlopen the plugin the image is built to preload, so the container exited 1 on startup.
+      # A green build proves nothing about that; only starting the container does. So: build the
+      # runner-native (amd64) image, RUN it, and require that busbar actually comes up and serves
+      # /healthz before anything is pushed to a registry.
+      #
+      # Only amd64 is booted, because that is the runner's architecture and QEMU-emulating arm64
+      # here would test the emulator as much as the image. The arm64 leg is covered by the
+      # linkage/PGO gates in the build job, which run natively on ubuntu-24.04-arm.
+      #
+      # BUSBAR_ADMIN_TOKEN and ANTHROPIC_KEY are dummies: this asserts the gateway BOOTS with its
+      # baked config and the plugin loads, not that it can reach a provider.
+      - name: Boot the image and require busbar to serve (amd64)
+        run: |
+          set -euo pipefail
+          docker buildx build --load --platform linux/amd64 \
+            -f docker/bundle/Dockerfile -t busbar-headroom:smoke .
+          docker run -d --name smoke -p 18080:8080 \
+            -e ANTHROPIC_KEY=smoke-not-a-real-key \
+            -e BUSBAR_ADMIN_TOKEN=smoke-not-a-real-token \
+            busbar-headroom:smoke
+          ok=""
+          for _ in $(seq 1 30); do
+            if [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/healthz || true)" = "200" ]; then
+              ok=1; break
+            fi
+            sleep 1
+          done
+          echo "===== container log ====="
+          docker logs smoke 2>&1 || true
+          echo "========================="
+          if [ -z "$ok" ]; then
+            echo "::error::busbar did not serve /healthz - refusing to publish an image that does not boot" >&2
+            docker rm -f smoke >/dev/null 2>&1 || true
+            exit 1
+          fi
+          # The plugin loading is the WHOLE POINT of this image, and busbar logs a warning and
+          # keeps going in some plugin-degraded paths, so assert the success line explicitly
+          # rather than treating a 200 from /healthz as proof the hook is wired.
+          if ! docker logs smoke 2>&1 | grep -q 'plugin validated.*busbar-headroom'; then
+            echo "::error::the headroom plugin did not validate inside the image" >&2
+            docker rm -f smoke >/dev/null 2>&1 || true
+            exit 1
+          fi
+          if docker logs smoke 2>&1 | grep -qi 'failed to load plugin'; then
+            echo "::error::the headroom plugin failed to load - this is the exact defect this gate exists to catch" >&2
+            docker rm -f smoke >/dev/null 2>&1 || true
+            exit 1
+          fi
+          curl -s -i http://127.0.0.1:18080/healthz
+          docker rm -f smoke >/dev/null
 
       - name: Build and push
         id: push
