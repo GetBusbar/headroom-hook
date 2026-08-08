@@ -1,0 +1,55 @@
+name: consumer-verify
+
+# Does what this repo PUBLISHED actually work when a user gets it?
+#
+# Every other workflow here reports on itself. ci.yml proves the code builds and its tests pass.
+# release.yml's verify-assets proves the upload step believed it succeeded, asserted from inside the
+# run that did the uploading. None of that is evidence about the artifact a user downloads, and the
+# gap is not theoretical: webrequest-hook v1.0.4 published as a zero-asset phantom, and
+# headroom-hook's published bundle could not boot the gateway because its shipped config used shapes
+# busbar 1.5.3 retired. Both were green everywhere. Nothing anywhere noticed.
+#
+# The logic lives in ONE place for the whole fleet, exactly like plugin-ci.yml, so a fix reaches
+# every plugin at once instead of being copied ten times and drifting nine.
+#
+# WHY BOTH TRIGGERS. release: published catches a broken publish immediately, and it fires whether or
+# not the release workflow itself finished happy - which matters, because a verifier that only runs
+# when everything already worked is not a verifier. The daily schedule catches ROT: an artifact that
+# published fine can stop working later when nothing about it changed (a bundle that no longer boots
+# against a newer engine, an asset deleted by hand, a release un-flagged as latest). A
+# publish-time-only check structurally cannot see that class.
+on:
+  release:
+    types: [published]
+  schedule:
+    - cron: "13 9 * * *"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to verify (e.g. 1.0.4). Empty means the newest published release."
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  issues: write
+  actions: read
+
+jobs:
+  consumer:
+    uses: GetBusbar/busbar/.github/workflows/plugin-consumer-verify.yml@dev
+    with:
+      version: ${{ inputs.version || '' }}
+      # Read off the PUBLISHED artifact, not guessed from the crate name: the filename prefix and the
+      # manifest name genuinely differ across this fleet (the store repos drop the trailing -plugin
+      # that the auth repos keep, and store-valkey publishes as busbar-store-redis).
+      asset_prefix: busbar-headroom
+      plugin_name: busbar-headroom
+      plugin_alias: headroom
+      plugin_kind: hook
+      # This repo publishes a runnable bundle, so the check does not stop at 'the tarball exists':
+      # the image is pulled fresh and the container must BOOT and answer /healthz. That is the
+      # assertion that was missing when the published bundle shipped a config busbar had retired.
+      bundle_image: getbusbar/busbar-headroom
+      bundle_env: "ANTHROPIC_KEY=sk-ant-consumer-verify-dummy BUSBAR_ADMIN_TOKEN=consumer-verify-dummy"
+    secrets: inherit

@@ -266,3 +266,40 @@ jobs:
             -f event_type=upstream-release \
             -f "client_payload[repo]=${GITHUB_REPOSITORY}" \
             -f "client_payload[tag]=${GITHUB_REF_NAME}"
+
+  # THE LAST STEP: does what we just published work for a user?
+  #
+  # Everything above verifies what THIS RUN produced, from inside this run. verify-assets asserts the
+  # assets it uploaded are present, which proves the run believed itself. It cannot prove the tarball
+  # downloads for a stranger, unpacks into a plugin busbar will load, or (where a bundle is
+  # published) boots. Those are the failures that shipped: a zero-asset phantom release, and a
+  # published bundle that exits 1 on startup.
+  #
+  # Consumer verification is POST-PUBLICATION by nature - you cannot download an asset that was never
+  # uploaded - so this cannot block the publish and does not pretend to. What it does is make the
+  # verdict impossible to miss: a failure is THIS release run's failure, and the shared workflow also
+  # opens or updates one labelled issue naming the failing check, expected, observed and the run URL.
+  #
+  # !cancelled() because a needs: on a FAILED job skips its dependent by default - the exact shape
+  # that skips a release's own guard precisely when the release is broken.
+  consumer-verification:
+    name: consumer verification (LAST STEP)
+    needs: [verify-assets]
+    if: ${{ !cancelled() }}
+    uses: GetBusbar/busbar/.github/workflows/plugin-consumer-verify.yml@dev
+    with:
+      version: ${{ github.ref_name }}
+      asset_prefix: busbar-headroom
+      plugin_name: busbar-headroom
+      plugin_alias: headroom
+      plugin_kind: hook
+      # This repo publishes a runnable bundle, so the check does not stop at 'the tarball exists':
+      # the image is pulled fresh and the container must BOOT and answer /healthz. That is the
+      # assertion that was missing when the published bundle shipped a config busbar had retired.
+      bundle_image: getbusbar/busbar-headroom
+      bundle_env: "ANTHROPIC_KEY=sk-ant-consumer-verify-dummy BUSBAR_ADMIN_TOKEN=consumer-verify-dummy"
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+    secrets: inherit
