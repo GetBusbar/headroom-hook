@@ -1,27 +1,32 @@
-# STALE — written for the retired Unix-socket transport (docker-compose.yml, now flagged as not
-# currently buildable). Kept as a reference for the config shape; the `hooks:`/`socket:` block below
-# no longer matches how Headroom loads. For the current dlopen-plugin config shape (`plugins:` +
-# `global_hooks:` with `module: busbar-headroom`), see README.md "Install and run" / "Wire into
-# busbar" and bench/config.hook.yaml (a working example from this repo's own benchmark harness).
+# A minimal, CURRENT busbar config that wires this repo's headroom-hook plugin in as a
+# prompt-compression rewrite gate on every pool. Validated against the released busbar 1.5.3
+# with `busbar --validate`.
 #
-# Minimal busbar config for the `docker compose up` demo. Registers the Headroom
-# compression hook on every request + one pool over Anthropic. The busbar image
-# ships the vetted provider catalog, so you only name the provider and give it a
-# key via the environment (see docker-compose.yml). Swap the provider/model for
-# whatever you use — busbar speaks all six protocols.
+# This file used to describe the RETIRED Unix-socket transport (a `hooks.headroom.socket:` block
+# pointing at a shared volume, alongside `api_key_env:` and pool members using `target:`). All
+# three of those shapes were retired by the 1.5.0 config redesign and busbar 1.5.3 refuses to boot
+# a config still carrying them, so the old contents were not merely stale documentation, they were
+# an example that could not work. headroom-hook is a dlopen cdylib now: busbar loads it IN-PROCESS
+# from `plugins.dir`, there is no hook container and no socket volume.
+#
+# See README.md "Install and run" for the tarball drop-in, and bench/config.hook.yaml for the
+# variant this repo's own benchmark harness feeds to busbar.
+
 listen: "0.0.0.0:8080"
 
-hooks:
-  headroom:
-    kind: gate
-    socket: /run/busbar/headroom.sock   # the shared-volume path in docker-compose.yml
-    prompt: rw            # the rewrite grant
-    global: true          # compress every request
-    on_error: nothing     # a broken compressor never touches a request
+# An identity provider is DEFINED once here and REFERENCED by bare name from auth below; busbar
+# 1.5.3 retired the inline module form under `auth.admin_auth:`.
+identity-providers:
+  admin-tokens: { module: admin-tokens, token: { env: BUSBAR_ADMIN_TOKEN } }
 
+auth:
+  chain: []                 # open data-plane relay: fine for a local trial, never for production
+  admin_auth: [admin-tokens]
+
+# Secret fields are SECRET REFERENCES now, not `<field>_env` scalars.
 providers:
   anthropic:
-    api_key_env: ANTHROPIC_KEY
+    api_key: { env: ANTHROPIC_KEY }
 
 models:
   claude:
@@ -29,8 +34,36 @@ models:
     max_concurrent: 10
     upstream_model: claude-3-5-sonnet-20241022
 
+# A hook instance is DEFINED once here and REFERENCED by bare name from a pool. This replaces both
+# the inline hook maps that used to sit under `pools.*.hooks` and the removed top-level
+# `global_hooks:` list.
+hooks:
+  busbar-headroom:
+    module: busbar-headroom
+    kind: gate
+    prompt: rw              # the rewrite grant
+    timeout_ms: 25
+    on_error: nothing       # a broken compressor never touches a request
+    settings:
+      target_ratio: 0.5
+      min_savings_pct: 10
+
 pools:
+  # `hooks:` here is a RESERVED key, not a pool name: it attaches these hooks to ALL pools, which
+  # is what "global" means in 1.5.3. Drop it and put `hooks: [busbar-headroom]` inside a single
+  # pool to compress only that pool's traffic.
+  hooks: [busbar-headroom]
   default:
     members:
-      - target: claude
+      - model: claude       # `model:`, not the retired `target:`
         weight: 1
+
+plugins:
+  enabled: true
+  dir: /etc/busbar/plugins  # or wherever you unpacked the signed tarball
+  # busbar 1.5.3's own released binaries embed no plugin release public key, so they refuse every
+  # correctly-signed first-party tarball with "manifest claims first-party publisher 'busbar' but
+  # this build embeds no busbar release key". Until that is fixed upstream this opt-in is required
+  # even for a signed release artifact; busbar then logs a per-plugin UNVERIFIED warning.
+  # See https://github.com/GetBusbar/busbar/issues/50
+  trust: { allow_unsigned: true }

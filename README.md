@@ -127,20 +127,43 @@ first-party plugin:
      enabled: true
      dir: /etc/busbar/plugins   # or wherever you dropped the tarball
    ```
-3. Wire it in as a hook wherever you want compression — globally or per-pool:
+3. Wire it in as a hook wherever you want compression. busbar 1.5.3 retired the inline
+   hook-instance form that used to sit under `pools.*.hooks`: an instance is now DEFINED
+   once in a top-level `hooks:` map and REFERENCED from a pool by bare name. A config
+   still carrying the inline form is rejected at boot with
+   `[error] config.yaml: invalid YAML: invalid type: map, expected a string`.
 
    ```yaml
+   hooks:
+     busbar-headroom:
+       module: busbar-headroom
+       kind: gate
+       prompt: rw
+       timeout_ms: 50
+
    pools:
      default:
        hooks:
-         - { module: busbar-headroom, kind: gate, prompt: rw, timeout_ms: 50 }
+         - busbar-headroom
        members:
          - model: claude
    ```
 
-Because the tarball is signed with busbar's release key, it loads as first-party with
-zero extra trust configuration (`plugins.trust.allow_unsigned` is only needed for
-unsigned/dev builds).
+The tarball is signed with busbar's release key. In principle that means it loads as
+first-party with no extra trust configuration; in practice, busbar 1.5.3's own released
+binaries embed no release public key, so they refuse every first-party plugin with
+`manifest claims first-party publisher 'busbar' but this build embeds no busbar release
+key, so it cannot be verified`. Until that is fixed upstream you need
+
+```yaml
+plugins:
+  trust:
+    allow_unsigned: true
+```
+
+which busbar will then note with a per-plugin `WARN plugin validated as UNVERIFIED`.
+This is a busbar packaging defect, not a property of this tarball; see
+https://github.com/GetBusbar/busbar/issues/50.
 
 ### 2. Plugin drop-in (if you already run busbar)
 
@@ -159,11 +182,15 @@ first-party plugin:
      enabled: true
      dir: /etc/busbar/plugins   # or wherever you unpacked the tarball
    ```
-3. Wire it in as a hook wherever you want compression — globally or per-pool:
+3. Wire it in as a hook wherever you want compression. busbar 1.5.3 REMOVED the
+   config-facing `global_hooks:` list: define the instance once under the top-level
+   `hooks:` map, then attach it to EVERY pool via the reserved `pools.hooks:` key, or to
+   one pool via that pool's own `hooks:` list.
 
    ```yaml
-   global_hooks:
-     - module: busbar-headroom
+   hooks:
+     busbar-headroom:
+       module: busbar-headroom
        kind: gate
        prompt: rw            # the rewrite grant
        timeout_ms: 25        # ~550 µs typical; 25 ms is generous headroom
@@ -171,11 +198,18 @@ first-party plugin:
        settings:
          target_ratio: 0.5
          min_savings_pct: 10
+
+   pools:
+     hooks: [busbar-headroom]   # reserved key: attach to ALL pools
+     default:
+       members:
+         - model: claude
    ```
 
-Because the tarball is signed with busbar's release key, it loads as first-party with
-no extra trust configuration (`plugins.trust.allow_unsigned` is only needed for
-unsigned/dev builds).
+The tarball is signed with busbar's release key, but busbar 1.5.3's own released binaries
+embed no release public key and therefore refuse every first-party plugin. Until that is
+fixed upstream (https://github.com/GetBusbar/busbar/issues/50) you also need
+`plugins.trust.allow_unsigned: true`.
 
 ### Build from source
 
@@ -255,15 +289,18 @@ series carries a `pool` label, so one process serving N pools shows N rows.
 ## Wire into busbar (fleet-wide)
 
 Plugins are enabled once and referenced by `module:` — a hook is a plugin, there is no
-separate registry block:
+separate registry block. busbar 1.5.3 REMOVED the config-facing `global_hooks:` list: a
+hook instance is DEFINED once in the top-level `hooks:` map and attached to every pool by
+naming it in the reserved all-pools `pools.hooks:` list.
 
 ```yaml
 plugins:
   enabled: true
   dir: /etc/busbar/plugins
 
-global_hooks:                # fires on every request, in order
-  - module: busbar-headroom
+hooks:
+  busbar-headroom:
+    module: busbar-headroom
     kind: gate
     prompt: rw                # the rewrite grant
     timeout_ms: 25             # ~550 µs typical; 25 ms is generous headroom
@@ -271,6 +308,12 @@ global_hooks:                # fires on every request, in order
     settings:                  # pushed to the plugin on load, live-patchable after
       target_ratio: 0.5
       min_savings_pct: 10
+
+pools:
+  hooks: [busbar-headroom]    # reserved key: fires on every request, in every pool
+  default:
+    members:
+      - model: claude
 ```
 
 ## A/B test it (same plugin, two pools)
@@ -280,12 +323,18 @@ the hook, one without — and point half your traffic at each. Compare
 per-pool tokens and latency in `/metrics` or `GET /api/v1/admin/usage`.
 
 ```yaml
+hooks:
+  busbar-headroom:            # DEFINED once; leave `global:` off so it is opt-in per pool
+    module: busbar-headroom
+    kind: gate
+    prompt: rw
+
 pools:
   with-headroom:
-    hooks: [{ module: busbar-headroom, kind: gate, prompt: rw }]  # drop from global_hooks first
-    members: [ { target: claude-sonnet, weight: 1 } ]
+    hooks: [busbar-headroom]  # REFERENCED by bare name
+    members: [ { model: claude-sonnet, weight: 1 } ]
   baseline:
-    members: [ { target: claude-sonnet, weight: 1 } ]
+    members: [ { model: claude-sonnet, weight: 1 } ]
 ```
 
 > **Status:** pool-scoped rewrite gates were not fired by the pre-1.5.0 engine this
@@ -293,7 +342,7 @@ pools:
 > time), and on same-protocol passthrough the engine's pristine-bytes fast path can
 > skip the rewritten body — both found while building this POC and tracked upstream.
 > If your busbar build still has that limitation, A/B with two busbar instances (one
-> with a `global_hooks` entry, one without) instead, which is how the numbers above
+> with a globally-attached hook, one without) instead, which is how the numbers above
 > were measured. Check `busbar --version` / release notes for the fix.
 
 [`scripts/docker-smoke.sh`](scripts/docker-smoke.sh) is the release-gate check: it
