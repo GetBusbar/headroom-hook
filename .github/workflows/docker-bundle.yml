@@ -443,18 +443,38 @@ jobs:
             docker rm -f smoke >/dev/null 2>&1 || true
             exit 1
           fi
-          # The plugin loading is the WHOLE POINT of this image, and busbar logs a warning and
-          # keeps going in some plugin-degraded paths, so assert the success line explicitly
-          # rather than treating a 200 from /healthz as proof the hook is wired.
-          if ! docker logs smoke 2>&1 | grep -q 'plugin validated.*busbar-headroom'; then
-            echo "::error::the headroom plugin did not validate inside the image" >&2
+          # Loading the plugin is the WHOLE POINT of this image, so a 200 from /healthz is not
+          # sufficient proof on its own. Two POSITIVE assertions, in order of strength:
+          #
+          #   "plugin validated"                    - the manifest parsed and passed trust checks.
+          #                                           Manifest-only; proves nothing about dlopen.
+          #   "hook plugin declared content intent"  - busbar called INTO the loaded cdylib and got
+          #                                           its declaration back. Only reachable if the
+          #                                           dlopen actually succeeded, so this is THE line
+          #                                           that distinguishes a working bundle from the
+          #                                           one that shipped for two releases.
+          #
+          # Deliberately NOT grepping for the string "failed to load plugin": busbar emits
+          #   [warn] memfd load unavailable for plugin '...' (failed to load plugin '...' from
+          #          memfd: ...); falling back to private temp staging
+          # on the perfectly healthy path where memfd_create is unavailable and the loader uses its
+          # temp-staging fallback instead. Matching that substring would fail a GOOD build. The
+          # real failure signature is busbar's fail-closed refusal, which is matched instead.
+          log="$(docker logs smoke 2>&1)"
+          fail() {
+            echo "::error::$1" >&2
             docker rm -f smoke >/dev/null 2>&1 || true
             exit 1
-          fi
-          if docker logs smoke 2>&1 | grep -qi 'failed to load plugin'; then
-            echo "::error::the headroom plugin failed to load - this is the exact defect this gate exists to catch" >&2
-            docker rm -f smoke >/dev/null 2>&1 || true
-            exit 1
+          }
+          grep -q "plugin validated.*busbar-headroom" <<<"$log" \
+            || fail "the headroom plugin manifest did not validate inside the image"
+          grep -q "hook plugin declared content intent.*busbar-headroom" <<<"$log" \
+            || fail "the headroom cdylib was never successfully dlopened - busbar never got a content-intent declaration back from it. This is the exact defect this gate exists to catch."
+          # `if`, not `cmd && fail`: under `set -e` a non-matching grep in an `&&` list makes the
+          # whole list return 1 and kills the step, i.e. the gate would fail precisely when the
+          # image is healthy.
+          if grep -q "refusing to boot/reload with a silently-absent admission gate" <<<"$log"; then
+            fail "busbar refused to boot with the headroom gate absent"
           fi
           curl -s -i http://127.0.0.1:18080/healthz
           docker rm -f smoke >/dev/null
