@@ -2,7 +2,7 @@
 # next-version.sh — compute THIS repo's next release tag for release-on-upstream.yml.
 #
 # Single source of truth for the version math, exercised in CI by release-selftest.yml so the
-# release automation can't silently rot (guard #135.8). Prints "v<MAJOR>.<MINOR>.<PATCH>" to stdout.
+# release automation can't silently rot. Prints "v<MAJOR>.<MINOR>.<PATCH>" to stdout.
 #
 # Inputs (env, all optional):
 #   INPUT_VERSION    explicit version to cut (leading "v" tolerated) -> used verbatim.
