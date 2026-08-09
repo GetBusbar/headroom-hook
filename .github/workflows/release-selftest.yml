@@ -1,4 +1,4 @@
-# CI self-test for the release-on-upstream version-compute logic (guard #135.8).
+# CI self-test for the release-on-upstream version-compute logic.
 # Runs the REAL .github/scripts/next-version.sh against synthetic repos and asserts it produces a
 # valid next version for BOTH the has-prior-tag and no-prior-tag cases — WITHOUT publishing anything.
 # This is what keeps the release automation from silently rotting before the fleet fan-out is armed.

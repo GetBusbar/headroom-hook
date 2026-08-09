@@ -164,6 +164,13 @@ fn load(settings: &str) -> Arc<dyn RoutingPolicy> {
 fn req_with_history(history: String, ask: &str) -> RoutingRequest<'static> {
     let total_chars = history.len() + ask.len();
     RoutingRequest {
+        // A fixed correlation id: these fixtures assert on the gate's DECISION, and nothing in the
+        // headroom policy reads the id, so a constant keeps two otherwise-identical requests
+        // comparable instead of introducing a value that differs run to run.
+        request_id: 1,
+        // No signals: the engine only populates the bag for signals a hook asked for, and the
+        // headroom policy asks for none — an empty bag is what it is really handed in production.
+        signals: Default::default(),
         pool: "p",
         ingress_protocol: "anthropic",
         requested_model: None,
@@ -188,6 +195,8 @@ fn req_with_history(history: String, ask: &str) -> RoutingRequest<'static> {
 /// A request with NO prompt (grant absent): the projector carries no prompt keys → the gate abstains.
 fn req_without_prompt() -> RoutingRequest<'static> {
     RoutingRequest {
+        request_id: 2,
+        signals: Default::default(),
         pool: "p",
         ingress_protocol: "anthropic",
         requested_model: None,
@@ -217,6 +226,7 @@ fn cand(idx: usize) -> Candidate<'static> {
         available_concurrency: 1,
         budget_remaining: None,
         rate_headroom: None,
+        signals: Default::default(),
     }
 }
 

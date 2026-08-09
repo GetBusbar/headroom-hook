@@ -1,13 +1,13 @@
-# STALE since "Port headroom-hook to busbar's signed dlopen plugin ABI" (commit c37b798): this
+# STALE since "Port headroom-hook to busbar's signed dlopen plugin ABI": this
 # workflow builds a standalone `headroom-hook` BINARY for the RETIRED Unix-socket transport, but the
 # crate has been `crate-type = ["cdylib", "rlib"]` only since that port — no `[[bin]]`, no `fn main`
 # — so `cargo build --release` here can no longer produce a binary at all. `release.yml` is the real
 # release workflow now (builds the cdylib, packs+signs it as a busbar plugin tarball).
 #
 # The automatic `push: tags: v*` trigger is REMOVED below so this doesn't fail on every release tag.
-# Kept as `workflow_dispatch` only, and NOT deleted outright: whether to revive this as a Docker
-# image build for the standalone-plugin-loaded-into-busbar use case (see busbar-headroom bundled
-# image work) or retire it entirely is a product call, not made unilaterally here.
+# Kept as `workflow_dispatch` only, and NOT deleted outright: reviving it as a Docker image build
+# for the standalone-plugin-loaded-into-busbar use case (see busbar-headroom bundled image work)
+# and retiring it entirely are both still open options.
 #
 # Build the headroom-hook image for amd64 + arm64 and publish to Docker Hub,
 # tagged with the pushed vX.Y.Z tag and `latest`. Binaries are built on
@@ -15,7 +15,7 @@
 #
 # DEPRECATED / CURRENTLY BROKEN: this workflow builds `target/<triple>/release/headroom-hook`,
 # a binary that no longer exists — since "Port headroom-hook to busbar's signed dlopen plugin
-# ABI" (commit c37b798) this crate is `crate-type = ["cdylib", "rlib"]` only (no `[[bin]]`, no
+# ABI" this crate is `crate-type = ["cdylib", "rlib"]` only (no `[[bin]]`, no
 # `fn main`). `cargo build --release` here builds fine (the lib target), but there is no
 # `headroom-hook` executable to `file`/upload/COPY into the Dockerfile — this workflow would
 # fail partway through if it ran. The automatic `push: tags: v*` trigger has been REMOVED (see
@@ -24,9 +24,9 @@
 # headroom-release-publish.yml used to `gh workflow run docker.yml` after every merge to main
 # (dispatching a guaranteed-failing run on every real release, since this workflow was already
 # broken) — that call was retargeted to docker-bundle.yml instead, the actual current release
-# path. Use getbusbar/busbar-headroom (.github/workflows/docker-bundle.yml) instead — see
-# README.md's "Two ways to run" section. Fixing or retiring this file for good is a product call
-# for a human, not made unilaterally here.
+# path. Use getbusbar/busbar-headroom (.github/workflows/docker-bundle.yml) instead - see
+# README.md's "Two ways to run" section. This file is neither fixed nor deleted: it stays as a
+# manual-dispatch-only record of the retired transport.
 #
 # NOTE (see Dockerfile): on Linux, headroom-core's default tree links the ONNX
 # runtime at build time. The FIRST run of this workflow is the validation point

@@ -15,9 +15,8 @@ name: Docker (bundle)
 # this repo already declares busbarAI as a path dependency for busbar-plugin-sdk (see Cargo.toml),
 # so the sibling-checkout layout is already the convention. The build mirrors EXACTLY what
 # busbarAI's own docker.yml used to do when it bundled headroom into its own image, before that
-# responsibility moved to this repo (see busbarAI commit ed61aae "ci/docker: stop bundling
-# headroom into busbar's own release and image" — its PARENT commit has the full original logic
-# this workflow was transcribed from): same PGO-mandatory fail-closed release build, same
+# responsibility moved to this repo (busbarAI stopped bundling headroom into busbar's own release
+# and image at that point): same PGO-mandatory fail-closed release build, same
 # musl-native `rust:alpine` container trick, exact-ABI-matched runtime libs extracted from the
 # same container so dlopen() succeeds in a FROM-scratch image with no libc at all.
 #
@@ -35,8 +34,8 @@ name: Docker (bundle)
 #
 # Needs real `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` secrets on THIS repo to push. As of this
 # workflow's authoring both are provisioned (`gh secret list --repo GetBusbar/headroom-hook`
-# shows DOCKERHUB_TOKEN + DOCKERHUB_USERNAME) — verify the push step yourself before relying on
-# it; it was not (and cannot be) exercised by the agent that authored this file.
+# shows DOCKERHUB_TOKEN + DOCKERHUB_USERNAME). The push step is only exercised by a real tagged
+# run, so confirm it once against this repo's credentials before relying on it.
 
 on:
   push:
@@ -96,20 +95,14 @@ jobs:
           ref: ${{ env.BUSBARAI_REF }}
           path: busbarAI
 
-      # headroom-hook's Cargo.toml currently declares busbar-plugin-sdk (and its dev-dependency)
-      # as an ABSOLUTE local path (/Users/matthew/Developer/busbarAI/busbarAI/crates/...) — a
-      # stopgap documented in Cargo.toml pending busbarAI going public. Despite a comment
-      # elsewhere claiming this is already a sibling-relative path, it is NOT, as of this
-      # workflow's authoring (verified by reading the checked-out Cargo.toml directly) — so this
-      # step patches it for CI, exactly the workaround busbarAI's own release.yml used to carry
-      # before headroom-hook was (incorrectly, per that same verification) believed to no longer
-      # need it. Remove this step once headroom-hook's Cargo.toml itself switches to a real
-      # sibling-relative path (`../busbarAI/crates/...`).
-      - name: Patch headroom-hook's interim path dependencies for CI
+      # headroom-hook's Cargo.toml declares busbar-plugin-sdk (and its dev-dependency) as
+      # SIBLING-RELATIVE path dependencies (`../busbarAI/crates/...`), which is exactly the layout
+      # the two checkout steps above produce. An absolute or otherwise non-sibling path here would
+      # not resolve against this job's tree, and cargo's failure for it is a confusing one, so
+      # assert the shape up front rather than letting the build step report it.
+      - name: Assert headroom-hook's path dependencies are sibling-relative
         run: |
           set -euo pipefail
-          sed -i.bak 's#/Users/matthew/Developer/busbarAI/busbarAI/crates#../busbarAI/crates#g' headroom-hook/Cargo.toml
-          rm -f headroom-hook/Cargo.toml.bak
           grep 'path = "\.\./busbarAI' headroom-hook/Cargo.toml
 
       - uses: dtolnay/rust-toolchain@stable
