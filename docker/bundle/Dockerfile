@@ -56,9 +56,8 @@
 # musl-native container, so the ABI matches) is what makes dlopen() succeed in a FROM-scratch
 # image that otherwise has no libc at all. This whole mechanism — the musl-native rust:alpine
 # build container, crt-static disabled, runtime-lib extraction — is ported verbatim from
-# busbarAI's git history (its Dockerfile/docker.yml used to bundle headroom this exact way,
-# before that responsibility moved to this repo; see busbarAI commit ed61aae's parent for the
-# original, already-solved implementation this was transcribed from).
+# busbarAI's own image build, which used to bundle headroom this exact way before that
+# responsibility moved to this repo.
 #
 # Run (zero-config quickstart — headroom active, one provider):
 #   docker run -d -p 8080:8080 \

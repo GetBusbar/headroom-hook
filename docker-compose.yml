@@ -3,7 +3,7 @@
 # This file composes two containers around a shared Unix socket — the RETIRED
 # pre-dlopen-ABI transport. headroom-hook has not shipped a standalone binary (and so
 # no getbusbar/headroom-hook image build has succeeded) since "Port headroom-hook to
-# busbar's signed dlopen plugin ABI" (commit c37b798): the plugin is now an in-process
+# busbar's signed dlopen plugin ABI": the plugin is now an in-process
 # cdylib busbar dlopen's itself, not a second process with a socket to connect to.
 #
 # For "one container, zero config, busbar + headroom together" today, use
