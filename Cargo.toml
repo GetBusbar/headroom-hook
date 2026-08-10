@@ -1,6 +1,6 @@
 [package]
 name = "headroom-hook"
-version = "2.0.4"
+version = "2.0.5"
 edition = "2024"
 publish = false
 description = "busbar first-party kind:hook plugin (dlopen cdylib): compresses LLM chat history with the real headroom-core BM25 TextCrusher engine as a prompt:rw rewrite gate."
