@@ -51,12 +51,30 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" \
+          set +e
+          create_out=$(gh release create "${GITHUB_REF_NAME}" \
             --repo "${GITHUB_REPOSITORY}" \
             --title "busbar-headroom ${GITHUB_REF_NAME}" \
             --draft \
-            --verify-tag --generate-notes \
-          || gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}"
+            --verify-tag --generate-notes 2>&1)
+          status=$?
+          set -e
+          echo "$create_out"
+          if [ "$status" -eq 0 ]; then
+            exit 0
+          fi
+          # Only swallow the specific "a release already exists for this tag" race (two runs of this
+          # job triggered for the same tag) — any other failure (auth error, --verify-tag rejection,
+          # --generate-notes error, etc.) must fail the job, not be silently papered over by falling
+          # through to `gh release view`. A bare `create || view` cannot tell those apart: when a
+          # STALE Release from a prior aborted run exists, `view` succeeds and the step goes green,
+          # and the matrix then signs, attests and uploads onto that stale Release.
+          if echo "$create_out" | grep -qi "already exists"; then
+            echo "Release ${GITHUB_REF_NAME} already exists — reusing it (parallel/retried run)."
+            gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}"
+          else
+            exit "$status"
+          fi
 
   # One signed .tar.gz per target: {cdylib + manifest.json}, packed by busbar-plugin-pack and
   # signed with the busbar release PRIVATE key (BUSBAR_SIGN_KEY secret) so it verifies as
@@ -124,6 +142,15 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
+        with:
+          # REQUIRED. Without `workspaces:` this action looks for ONE Cargo workspace at the
+          # checkout root, and nothing is checked out there: every checkout above uses `path:`.
+          # It logged "could not find Cargo.toml" and carried on WITHOUT failing, so this job
+          # rebuilt everything from scratch on every run while the log said the cache step
+          # succeeded. Each workspace this job actually builds must be named.
+          workspaces: |
+            headroom-hook
+            busbarAI
 
       - name: Build the headroom-hook plugin cdylib
         working-directory: headroom-hook
