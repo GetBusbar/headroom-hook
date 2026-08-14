@@ -93,6 +93,55 @@ jobs:
             --verify-tag --generate-notes \
           || gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}"
 
+  # THE PLATFORM LIST, IN EXACTLY ONE PLACE. This job reads .github/release-targets.json and emits
+  # BOTH the build matrix `headroom-plugin` runs AND the exact set of asset filenames that matrix is
+  # contractually obliged to produce. `headroom-plugin` consumes the first; `verify-assets` consumes the
+  # second -- so "the set that was supposed to be built" and "the set that gets verified" are
+  # literally the same computation and cannot drift apart.
+  #
+  # WHY IT IS A JOB AND NOT A LITERAL MATRIX. busbar v1.5.3 published FIVE assets where seven were
+  # expected, and the guard of the day asserted `assets != 0`, which a five-asset release passes
+  # comfortably. A count can never see a MISSING platform; only a name can. A hardcoded
+  # expected-names list in the verifier would be a second place to forget a platform, which is the
+  # same defect one level up.
+  targets:
+    name: release target matrix (single source of truth)
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.emit.outputs.matrix }}
+      assets: ${{ steps.emit.outputs.assets }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Emit the target matrix and the asset names it must produce
+        id: emit
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os
+          spec = json.load(open(".github/release-targets.json"))
+          tag = os.environ["GITHUB_REF_NAME"]
+          ver = tag[1:] if tag.startswith("v") else tag
+          # EVERY per-target difference travels in the matrix as a PARAMETER, so there is no `if:`
+          # and no second build path for a property to be established on one and unproven on the
+          # other.
+          fields = ("target", "os", "libext", "libprefix")
+          inc = [{k: t[k] for k in fields} for t in spec["targets"]]
+          assets = ["%s-%s-%s.tar.gz" % (spec["asset_prefix"], ver, t["target"])
+                    for t in spec["targets"]]
+          # A FLOOR, BECAUSE A LOOP OVER A DISCOVERED SET WITH NO FLOOR PASSES WHEN THE SET IS EMPTY.
+          # Both the build matrix and the expectation list are enumerated from this output, so a
+          # truncated or mis-parsed manifest would otherwise build nothing, expect nothing, and
+          # report green all the way to a promoted release with no assets on it.
+          if len(inc) < 5:
+              raise SystemExit(
+                  "release-targets.json declares %d targets; this plugin ships 5. Refusing to "
+                  "run a build matrix and an expectation list over a set this small: an empty "
+                  "expectation list passes for a release that published nothing." % len(inc))
+          print("matrix=" + json.dumps({"include": inc}))
+          print("assets=" + json.dumps(assets))
+          PY
+          cat "$GITHUB_OUTPUT"
+
   # One signed .tar.gz per target: {cdylib + manifest.json}, packed by busbar-plugin-pack and
   # signed with the busbar release PRIVATE key (BUSBAR_SIGN_KEY secret) so it verifies as
   # first-party against the PUBLIC key embedded in busbar's own release binaries. If that secret
@@ -100,33 +149,12 @@ jobs:
   # plugins.trust.allow_unsigned) rather than blocking the release — same seam every other
   # first-party plugin's release.yml documents.
   headroom-plugin:
-    needs: create-release
+    needs: [create-release, targets]
     name: headroom-plugin (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-            libext: so
-            libprefix: lib
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-24.04-arm
-            libext: so
-            libprefix: lib
-          - target: x86_64-apple-darwin
-            os: macos-latest
-            libext: dylib
-            libprefix: lib
-          - target: aarch64-apple-darwin
-            os: macos-latest
-            libext: dylib
-            libprefix: lib
-          - target: x86_64-pc-windows-msvc
-            os: windows-latest
-            libext: dll
-            libprefix: ""
+      matrix: ${{ fromJSON(needs.targets.outputs.matrix) }}
     steps:
       - name: Checkout headroom-hook
         uses: actions/checkout@v7
@@ -212,41 +240,110 @@ jobs:
         with:
           subject-path: "plugin-dist/*.tar.gz"
 
-  # PHANTOM-RELEASE GUARD: assert the published Release actually carries assets before we treat this
-  # as a real release. The per-target build/upload jobs run with fail-fast:false, and `create-release`
-  # always makes the (initially empty) Release up front — so a build/pack failure on EVERY target
-  # (e.g. a stale Cargo.lock tripping `--locked`) leaves a tag + Release with ZERO assets: a "phantom"
-  # that silently breaks busbar's plugin-registry-gate. This job fails the whole release run loud if
-  # assets == 0, so a phantom can never ship (or notify downstream) unnoticed. It depends on the build
-  # matrix but does NOT inherit its fail-fast:false — one green target is enough to have assets, but
-  # zero across the board must hard-fail here.
+  # PHANTOM- AND PARTIAL-RELEASE GUARD, AND THE ONLY THING THAT EVER PUBLISHES. It asserts the DRAFT
+  # carries every asset the matrix owes it, BY NAME, and only then promotes it to published+latest.
+  # Nothing above this job is user-facing: `create-release` makes a DRAFT, which does not resolve as
+  # `releases/latest` and is invisible to `gh release download`, so a red verdict here stops the
+  # release before a single user-facing name is minted instead of reporting damage already done.
+  #
+  # WHY BY NAME. The check this replaces asserted `assets != 0`. `headroom-plugin` runs `fail-fast: false`, so
+  # a release that built ONE target out of 5 passed that check comfortably -- which is exactly
+  # how busbar v1.5.3 shipped five assets where seven were expected and the two most common
+  # platforms 404'd for every user who followed the documented download link. A count cannot see a
+  # missing platform. The expected names come from the same `targets` job that produced the build
+  # matrix, so the expectation cannot drift away from the thing being built.
+  #
+  # `!cancelled()` IS LOAD-BEARING, and it is the second half of that same defect: `headroom-plugin` runs
+  # fail-fast:false, so a partial matrix FAILS the job, and a `needs:` on a failed job SKIPS its
+  # dependent by default -- the one guard that exists to notice a broken release would be switched
+  # off precisely when the release is broken. Running on `!cancelled()` turns a partial matrix into
+  # a RED verify-assets that NAMES the missing platforms, instead of a grey one that names nothing.
   verify-assets:
-    needs: [headroom-plugin]
+    name: the draft owes every asset the manifest names
+    needs: [targets, headroom-plugin]
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
-      - name: Assert the Release has at least one asset
+      - name: Assert the draft carries every asset, then promote it
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EXPECTED: ${{ needs.targets.outputs.assets }}
         run: |
           set -euo pipefail
-          count="$(gh release view "${GITHUB_REF_NAME}" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --json assets --jq '.assets | length')"
-          echo "Release ${GITHUB_REF_NAME} has ${count} asset(s)."
-          if [ "${count}" -eq 0 ]; then
-            echo "::error::PHANTOM RELEASE: ${GITHUB_REF_NAME} was published with 0 assets." \
-                 "Every build/pack target failed to upload a tarball. Failing the release run so this" \
-                 "tag is not mistaken for a real release by busbar's plugin-registry-gate. Fix the" \
-                 "build (check Cargo.lock freshness vs --locked and the plugin cdylib build step)," \
-                 "delete this tag+release, and re-cut." >&2
+          # `!cancelled()` means this runs even when `targets` itself failed, and an empty
+          # expectation list would then "verify" every release vacuously. Refuse instead.
+          if [ -z "${EXPECTED:-}" ]; then
+            echo "::error::The targets job produced no expected-asset list, so there is nothing to" \
+                 "verify ${GITHUB_REF_NAME} against. Refusing to promote: it stays a draft." >&2
             exit 1
           fi
-          # Only now, with assets provably attached, does this stop being a draft and become
-          # the release that `releases/latest` resolves to.
+          gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" \
+            --json assets --jq '.assets[] | "\(.name)\t\(.size)"' > /tmp/got.tsv || : > /tmp/got.tsv
+          echo "Draft ${GITHUB_REF_NAME} carries these assets:"
+          cat /tmp/got.tsv
+          python3 - <<'PY'
+          import json, os, sys
+          expected = json.loads(os.environ["EXPECTED"])
+          tag = os.environ["GITHUB_REF_NAME"]
+          got = {}
+          for line in open("/tmp/got.tsv"):
+              line = line.rstrip("\n")
+              if not line:
+                  continue
+              name, _, size = line.partition("\t")
+              got[name] = int(size or 0)
+
+          missing = [a for a in expected if a not in got]
+          # A NAME IN THE ASSET LIST IS NOT A USABLE ARTIFACT: GitHub creates the row as soon as the
+          # upload starts, so a 0-byte or truncated upload lists identically to a good one. 1 KiB is
+          # far below any real plugin tarball and far above an empty or header-only file.
+          empty = [a for a in expected if a in got and got[a] < 1024]
+
+          lines = ["### Draft asset verification", "",
+                   "| asset | bytes | verdict |", "| --- | --- | --- |"]
+          for a in expected:
+              if a not in got:
+                  lines.append("| `%s` | - | MISSING |" % a)
+              elif got[a] < 1024:
+                  lines.append("| `%s` | %d | TOO SMALL |" % (a, got[a]))
+              else:
+                  lines.append("| `%s` | %d | ok |" % (a, got[a]))
+          extra = sorted(set(got) - set(expected))
+          if extra:
+              lines += ["", "Also present (not required): " + ", ".join("`%s`" % e for e in extra)]
+          summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary:
+              open(summary, "a").write("\n".join(lines) + "\n")
+          print("\n".join(lines))
+
+          if not got:
+              print("::error::PHANTOM RELEASE: the %s draft has 0 assets. Every build/pack target "
+                    "failed to upload a tarball. Nothing is public and nothing was promoted, so "
+                    "this is a clean retry: fix the build (check Cargo.lock freshness vs --locked "
+                    "and the plugin cdylib build step) and re-run this workflow." % tag,
+                    file=sys.stderr)
+              sys.exit(1)
+          if missing:
+              print("::error::INCOMPLETE RELEASE: the %s draft is missing %d of %d required "
+                    "asset(s): %s. Each missing name is a PLATFORM whose users would get a 404 from "
+                    "the documented download URL, and busbar's plugin-registry-gate resolves the "
+                    "first-party plugin by exactly this name. Nothing was promoted, so fix that "
+                    "target's leg and re-run: no tag to delete, no release to unpublish." %
+                    (tag, len(missing), len(expected), ", ".join(missing)), file=sys.stderr)
+          if empty:
+              print("::error::TRUNCATED RELEASE: these %s draft assets are under 1 KiB, which means "
+                    "the upload was cut short and the asset is useless to anyone who downloads it: "
+                    "%s" % (tag, ", ".join(empty)), file=sys.stderr)
+          if missing or empty:
+              sys.exit(1)
+          print("All %d required assets present and plausibly sized." % len(expected))
+          PY
+          # Only now, with EVERY promised asset provably attached and plausibly sized, does this
+          # stop being a draft and become the release that `releases/latest` resolves to.
           gh release edit "${GITHUB_REF_NAME}" \
             --repo "${GITHUB_REPOSITORY}" \
             --draft=false --latest
-          echo "::notice::Published ${GITHUB_REF_NAME} with ${count} asset(s)."
+          echo "::notice::Published ${GITHUB_REF_NAME} with every asset in the contract."
 
   # Instant marketing-site rebuild the moment this plugin ships a real release -- marketing's
   # deploy.yml listens for this exact repository_dispatch event type (plus its own daily-poll
