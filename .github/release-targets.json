@@ -1,0 +1,60 @@
+{
+  "_comment": [
+    "THE PLATFORM LIST, IN EXACTLY ONE PLACE.",
+    "",
+    "release.yml's `targets` job reads this file and emits TWO things from it: the build matrix the",
+    "`headroom-plugin` job runs, and the exact set of release-asset filenames that matrix is contractually",
+    "obliged to produce. `verify-assets` asserts every one of those names is present on the DRAFT",
+    "release before promoting it, so adding or removing a platform is ONE edit here and its",
+    "verification comes along automatically.",
+    "",
+    "WHY A NAME AND NOT A COUNT. busbar v1.5.3 published FIVE assets where SEVEN were expected:",
+    "aarch64-apple-darwin and x86_64-unknown-linux-gnu were both missing, which is Apple Silicon Mac",
+    "and x86_64 Linux, the two most common platforms there are. The guard of the day asserted",
+    "`assets != 0`, which a five-asset release passes comfortably. A COUNT CAN NEVER SEE A MISSING",
+    "PLATFORM; ONLY A NAME CAN. And a hardcoded expected-names list inside the verifier would just be",
+    "a SECOND place to forget a platform, which is the same defect one level up -- hence one file,",
+    "two derived outputs.",
+    "",
+    "FIELDS, all of which are inputs to the SAME build steps, never selectors for different ones:",
+    "  target     the rust target triple. The published asset is always",
+    "             <asset_prefix>-<version>-<target>.tar.gz -- plugin-pack writes a tarball on every",
+    "             platform, Windows included.",
+    "  os         the GitHub-hosted runner label that builds this target natively.",
+    "  libext     the cdylib extension this platform produces (so / dylib / dll).",
+    "  libprefix  the cdylib filename prefix ('lib' everywhere except MSVC)."
+  ],
+  "asset_prefix": "busbar-headroom",
+  "targets": [
+    {
+      "target": "x86_64-unknown-linux-gnu",
+      "os": "ubuntu-latest",
+      "libext": "so",
+      "libprefix": "lib"
+    },
+    {
+      "target": "aarch64-unknown-linux-gnu",
+      "os": "ubuntu-24.04-arm",
+      "libext": "so",
+      "libprefix": "lib"
+    },
+    {
+      "target": "x86_64-apple-darwin",
+      "os": "macos-latest",
+      "libext": "dylib",
+      "libprefix": "lib"
+    },
+    {
+      "target": "aarch64-apple-darwin",
+      "os": "macos-latest",
+      "libext": "dylib",
+      "libprefix": "lib"
+    },
+    {
+      "target": "x86_64-pc-windows-msvc",
+      "os": "windows-latest",
+      "libext": "dll",
+      "libprefix": ""
+    }
+  ]
+}
