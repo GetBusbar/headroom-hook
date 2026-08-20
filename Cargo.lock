@@ -929,7 +929,7 @@ dependencies = [
 [[package]]
 name = "headroom-core"
 version = "0.1.0"
-source = "git+https://github.com/headroomlabs-ai/headroom?tag=v0.35.0#93f2d7a2da4d3b6c88f31bad164ae299cf042104"
+source = "git+https://github.com/headroomlabs-ai/headroom?tag=v0.36.0#b88b9078d8eda7b91e1543b33fa44d793869afa6"
 dependencies = [
  "aho-corasick",
  "blake3",
@@ -945,7 +945,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
- "sha2 0.10.9",
+ "sha2 0.11.0",
  "thiserror",
  "tiktoken-rs",
  "tokenizers",
@@ -965,7 +965,7 @@ dependencies = [
 
 [[package]]
 name = "headroom-hook"
-version = "2.0.14"
+version = "2.0.15"
 dependencies = [
  "base64 0.22.1",
  "busbar-api",

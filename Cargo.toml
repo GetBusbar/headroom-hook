@@ -1,6 +1,6 @@
 [package]
 name = "headroom-hook"
-version = "2.0.14"
+version = "2.0.15"
 edition = "2024"
 publish = false
 description = "busbar first-party kind:hook plugin (dlopen cdylib): compresses LLM chat history with the real headroom-core BM25 TextCrusher engine as a prompt:rw rewrite gate."
@@ -17,7 +17,7 @@ crate-type = ["cdylib", "rlib"]
 # to the upstream merge commit — the fork is retired. The gate is not in a release yet (latest is
 # v0.31.0, pre-merge); the docker CI (see .github/workflows/headroom-release-watch.yml) re-pins to
 # the first upstream RELEASE tag that contains the gate and rebuilds. The pin protects builds.
-headroom-core = { git = "https://github.com/headroomlabs-ai/headroom", tag = "v0.35.0", default-features = false }
+headroom-core = { git = "https://github.com/headroomlabs-ai/headroom", tag = "v0.36.0", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # INTERIM: busbarAI isn't public yet, so this is a local path dependency into a sibling checkout of
