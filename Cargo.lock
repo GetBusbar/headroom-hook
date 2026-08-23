@@ -935,7 +935,7 @@ dependencies = [
 [[package]]
 name = "headroom-core"
 version = "0.1.0"
-source = "git+https://github.com/headroomlabs-ai/headroom?tag=v0.36.4#91186b40d886c78e4b126d15837a51bea0a871e3"
+source = "git+https://github.com/headroomlabs-ai/headroom?tag=v0.36.5#34a551756222b24ea4bc064f4250b8e7d169daf1"
 dependencies = [
  "aho-corasick",
  "blake3",
@@ -971,7 +971,7 @@ dependencies = [
 
 [[package]]
 name = "headroom-hook"
-version = "2.0.17"
+version = "2.0.18"
 dependencies = [
  "base64 0.22.1",
  "busbar-api",
