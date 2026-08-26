@@ -36,3 +36,56 @@ jobs:
       # with an unreadable git error on EVERY pull request to this repo.
       # Same-branch intent is unchanged: qa builds core qa, dev builds core dev, never a
       # stale main or tag.
+
+  # coverage — INFORMATIONAL ONLY, never a gate. Additive to the `ci` job above; the `ci` job stays
+  # the sole correctness signal and this repo has no umbrella job, so `coverage` is not a required
+  # context and nothing `needs:` it. It mirrors plugin-ci's build layout (this plugin's Cargo.toml
+  # depends on a SIBLING `../busbarAI` checkout of the monorepo, so the plugin is checked out to
+  # `plugin/` and busbar to `busbarAI/`), then instruments the plugin workspace with cargo-llvm-cov
+  # and uploads lcov to Codecov tokenlessly. `service: none` for this hook, so no service containers.
+  #
+  # The `if:` copies core's coverage-tier convention: skip on a plain feature-branch push, run on
+  # main/dev/qa pushes and on every pull_request / workflow_dispatch. This repo only pushes on
+  # main/dev/qa today, so it is always-true here, but it is carried verbatim so the rule cannot drift
+  # from the fleet.
+  coverage:
+    name: coverage (llvm-cov · codecov)
+    runs-on: ubuntu-latest
+    if: github.event_name != 'push' || contains(fromJSON('["refs/heads/main", "refs/heads/dev", "refs/heads/qa"]'), github.ref)
+    steps:
+      - name: Checkout the plugin
+        uses: actions/checkout@v7
+        with:
+          path: plugin
+      # Sibling busbar checkout the plugin's `../busbarAI/...` path dependencies resolve against.
+      # Same-branch intent as the `ci` job: base_ref FIRST so a pull_request's '<number>/merge'
+      # ref never leaks into the checkout.
+      - name: Checkout busbar (sibling path dependency)
+        uses: actions/checkout@v7
+        with:
+          repository: GetBusbar/busbar
+          ref: ${{ github.base_ref || github.ref_name }}
+          path: busbarAI
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          # Both checkouts use `path:`, so neither Cargo workspace lives at the checkout root; the
+          # action would otherwise find no Cargo.toml and silently cache nothing. See plugin-ci.yml.
+          workspaces: |
+            plugin
+            busbarAI
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Collect coverage (workspace)
+        working-directory: plugin
+        run: cargo llvm-cov --workspace --locked --lcov --output-path lcov.info
+      - name: Upload to Codecov (tokenless; never fails the build)
+        uses: codecov/codecov-action@v5
+        with:
+          files: plugin/lcov.info
+          slug: GetBusbar/headroom-hook
+          fail_ci_if_error: false

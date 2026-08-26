@@ -1,5 +1,7 @@
 # headroom-hook
 
+[![Coverage](https://codecov.io/gh/GetBusbar/headroom-hook/branch/dev/graph/badge.svg)](https://codecov.io/gh/GetBusbar/headroom-hook)
+
 **v2.** Compresses LLM chat history inside [busbar](https://getbusbar.com)
 using [headroom](https://github.com/headroomlabs-ai/headroom)'s Rust
 compression core (`TextCrusher`, pure BM25: no model, no network, no proxy).
