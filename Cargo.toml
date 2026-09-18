@@ -15,7 +15,7 @@ crate-type = ["cdylib", "rlib"]
 # lexical build is ~7x smaller (29MB -> ~3MB) and avoids the ONNX-in-distroless slow path. The
 # `ml`-feature gate landed UPSTREAM in headroomlabs-ai/headroom#2165 (merged 2026-07-15), so we pin
 # to the upstream merge commit — the fork is retired. The gate is not in a release yet (latest is
-# v0.31.0, pre-merge); the docker CI (see .github/workflows/headroom-release-watch.yml) re-pins to
+# v0.33.0, pre-merge); the docker CI (see .github/workflows/headroom-release-watch.yml) re-pins to
 # the first upstream RELEASE tag that contains the gate and rebuilds. The pin protects builds.
 headroom-core = { git = "https://github.com/headroomlabs-ai/headroom", tag = "v0.38.0", default-features = false }
 serde = { version = "1", features = ["derive"] }
@@ -24,12 +24,12 @@ serde_json = "1"
 # the monorepo. Once busbarAI ships publicly this should become a git (pinned rev/tag) or crates.io
 # dependency instead — same relative-path convention webrequest-hook's busbar-plugin-sdk dependency
 # already uses.
-busbar-plugin-sdk = { path = "../busbarAI/crates/plugin-sdk" }
+busbar-plugin-sdk = { path = "../busbar/crates/plugin-sdk" }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "macros"] }
-busbar-plugin-loader = { path = "../busbarAI/crates/plugin-loader" }
-busbar-api = { path = "../busbarAI/crates/api" }
+busbar-plugin-loader = { path = "../busbar/crates/plugin-loader" }
+busbar-api = { path = "../busbar/crates/api" }
 # Dev-only: the real-admin-API e2e test builds+drives an actual `busbar` process over HTTP (install
 # a signed plugin tarball via POST /api/v1/admin/plugins, mint a key, drive a real chat completion)
 # — a blocking client keeps that test synchronous, no tokio runtime needed. Same major version
