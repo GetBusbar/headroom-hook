@@ -935,7 +935,7 @@ dependencies = [
 [[package]]
 name = "headroom-core"
 version = "0.1.0"
-source = "git+https://github.com/headroomlabs-ai/headroom?tag=v0.36.5#34a551756222b24ea4bc064f4250b8e7d169daf1"
+source = "git+https://github.com/headroomlabs-ai/headroom?tag=v0.38.0#94206e265203acfd72a3b939e9a964e29175ad50"
 dependencies = [
  "aho-corasick",
  "blake3",
@@ -971,7 +971,7 @@ dependencies = [
 
 [[package]]
 name = "headroom-hook"
-version = "2.0.21"
+version = "2.0.22"
 dependencies = [
  "base64 0.22.1",
  "busbar-api",
@@ -2593,13 +2593,12 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter"
-version = "0.25.2"
+version = "0.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5168a515fe492af54c5cc8800ff8c840be09fa5168de45838afaecd3e008bce4"
+checksum = "2038684e0058edba0d17302619f62eabce4a8e11c6ac59506996a8d79848851d"
 dependencies = [
  "cc",
  "regex",
- "regex-syntax",
  "serde_json",
  "streaming-iterator",
  "tree-sitter-language",
@@ -2657,9 +2656,9 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter-language"
-version = "0.1.7"
+version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "009994f150cc0cd50ff54917d5bc8bffe8cad10ca10d81c34da2ec421ae61782"
+checksum = "ca0d1bf6fdd806e43ae5198f82f527056d359def39e54e67a0f478ac09dac081"
 
 [[package]]
 name = "tree-sitter-python"
