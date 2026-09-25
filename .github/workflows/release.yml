@@ -2,7 +2,7 @@
 # supported targets, pack + sign each into a loadable busbar plugin tarball, and publish them to
 # THIS repo's own GitHub Release.
 #
-# This mirrors busbarAI/.github/workflows/release.yml's `auth-plugins` job (and the identical
+# This mirrors busbar/.github/workflows/release.yml's `auth-plugins` job (and the identical
 # pattern GetBusbar/auth-oidc and GetBusbar/webrequest-hook use) — same 5-target matrix, same
 # busbar-plugin-pack pack/sign step (built from a sibling busbar checkout), same
 # BUSBAR_SIGN_KEY-or-`--allow-unsigned` fallback, same `gh release upload` + build-provenance
@@ -143,18 +143,18 @@ jobs:
         with:
           repository: GetBusbar/busbar
           ref: ${{ steps.ref.outputs.sha }}
-          path: busbarAI
+          path: busbar
 
-      # Normalizes whatever busbarAI path this checkout's Cargo.toml carries onto the
+      # Normalizes whatever busbar path this checkout's Cargo.toml carries onto the
       # sibling-relative form this job's layout produces. A no-op when the manifest already uses
-      # `../busbarAI/crates/...`; .github/workflows/docker-bundle.yml carries the same step.
+      # `../busbar/crates/...`; .github/workflows/docker-bundle.yml carries the same step.
       - name: Patch headroom-hook's interim path dependencies for CI
         shell: bash
         run: |
           set -euo pipefail
-          sed -i.bak -E 's#path = "[^"]*/busbarAI/crates#path = "../busbarAI/crates#g' headroom-hook/Cargo.toml
+          sed -i.bak -E 's#path = "[^"]*/busbar/crates#path = "../busbar/crates#g' headroom-hook/Cargo.toml
           rm -f headroom-hook/Cargo.toml.bak
-          grep 'path = "\.\./busbarAI' headroom-hook/Cargo.toml
+          grep 'path = "\.\./busbar' headroom-hook/Cargo.toml
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -167,8 +167,8 @@ jobs:
         shell: bash
 
       - name: Build busbar-plugin-pack (from the sibling busbar checkout)
-        working-directory: busbarAI
-        run: cargo build --release --target ${{ matrix.target }} -p busbar-plugin-pack
+        working-directory: busbar
+        run: cargo build --release --target ${{ matrix.target }} -p busbar-plugin-sdk --features pack --bin busbar-plugin-pack
         shell: bash
 
       - name: Package + sign the plugin tarball
@@ -179,11 +179,11 @@ jobs:
           ver="${GITHUB_REF_NAME#v}"
           target="${{ matrix.target }}"
           outdir="plugin-dist"; mkdir -p "$outdir"
-          pack="busbarAI/target/${target}/release/busbar-plugin-pack"
-          [ -x "$pack" ] || pack="busbarAI/target/${target}/release/busbar-plugin-pack.exe"
+          pack="busbar/target/${target}/release/busbar-plugin-pack"
+          [ -x "$pack" ] || pack="busbar/target/${target}/release/busbar-plugin-pack.exe"
           unsigned_flag=""
           if [ -z "${BUSBAR_SIGN_KEY:-}" ]; then
-            echo "::warning::BUSBAR_SIGN_KEY secret is not provisioned — packaging an UNSIGNED plugin tarball (loadable only under plugins.trust.allow_unsigned). See busbarAI's release.yml TODO(release-keys) seam."
+            echo "::warning::BUSBAR_SIGN_KEY secret is not provisioned — packaging an UNSIGNED plugin tarball (loadable only under plugins.trust.allow_unsigned). See busbar's release.yml TODO(release-keys) seam."
             unsigned_flag="--allow-unsigned"
           fi
           lib="headroom-hook/target/${target}/release/${{ matrix.libprefix }}headroom_hook.${{ matrix.libext }}"

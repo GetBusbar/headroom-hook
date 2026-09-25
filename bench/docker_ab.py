@@ -22,7 +22,7 @@
 # The plugin tarball is built and packed from THIS checkout (not pulled from a release), so the
 # bench always measures the current source tree: `cargo build --release` here, then
 # `busbar-plugin-pack pack --allow-unsigned` (the busbar-plugin-pack binary is built from the
-# busbarAI checkout — see BUSBARAI_DIR below). Both busbar and the plugin must target the SAME OS/
+# busbar checkout — see BUSBAR_DIR below). Both busbar and the plugin must target the SAME OS/
 # arch as the container (Linux); on a GitHub Actions Linux runner the host IS that arch, so a plain
 # `cargo build --release` is correct. On a non-Linux dev host (e.g. macOS), skip Docker and run
 # `../scripts/local_verify.sh`-style native verification instead — a locally-built .dylib cannot
@@ -175,24 +175,26 @@ def start_mock(delay_ms):
     time.sleep(2)
 
 
-def busbarai_dir():
-    """Locate the busbarAI checkout that provides busbar-plugin-pack.
+def busbar_dir():
+    """Locate the busbar checkout that provides busbar-plugin-pack.
 
     headroom-hook/Cargo.toml currently carries an INTERIM absolute path dependency on
-    busbar-plugin-sdk (busbarAI is not yet public — see the Cargo.toml comment). Parse that same
+    busbar-plugin-sdk (busbar is not yet public — see the Cargo.toml comment). Parse that same
     path out of Cargo.toml rather than hardcoding it a second time here, so this script and
-    Cargo.toml can only drift together. Override with BUSBARAI_DIR for a CI checkout laid out
-    differently (e.g. busbarAI's own release.yml checks headroom-hook out as a ../ sibling and
+    Cargo.toml can only drift together. Override with BUSBAR_DIR for a CI checkout laid out
+    differently (e.g. busbar's own release.yml checks headroom-hook out as a ../ sibling and
     patches this path — see that workflow's "Patch headroom-hook's interim path dependencies" step).
     """
-    env = os.environ.get("BUSBARAI_DIR")
+    # BUSBARAI_DIR is the pre-rename (busbarAI -> busbar) spelling, still honored so an existing
+    # invocation keeps working.
+    env = os.environ.get("BUSBAR_DIR") or os.environ.get("BUSBARAI_DIR")
     if env:
         return env
     cargo_toml = open(os.path.join(REPO, "Cargo.toml")).read()
     m = re.search(r'path\s*=\s*"([^"]+)/crates/plugin-sdk"', cargo_toml)
     if not m:
-        sys.exit("could not locate busbarAI checkout: no busbar-plugin-sdk path dep in Cargo.toml "
-                 "and BUSBARAI_DIR is not set")
+        sys.exit("could not locate busbar checkout: no busbar-plugin-sdk path dep in Cargo.toml "
+                 "and BUSBAR_DIR is not set")
     return m.group(1)
 
 
@@ -212,9 +214,10 @@ def prep_plugin():
     if not os.path.exists(lib):
         sys.exit(f"expected cdylib not found: {lib} (did the release build produce it?)")
 
-    bdir = busbarai_dir()
+    bdir = busbar_dir()
     print(f"building busbar-plugin-pack from {bdir} ...", file=sys.stderr)
-    sh("cargo", "build", "--release", "-p", "busbar-plugin-pack", cwd=bdir, quiet=False)
+    sh("cargo", "build", "--release", "-p", "busbar-plugin-sdk", "--features", "pack",
+       "--bin", "busbar-plugin-pack", cwd=bdir, quiet=False)
     pack = os.path.join(bdir, "target", "release", "busbar-plugin-pack")
     if not os.path.exists(pack):
         sys.exit(f"busbar-plugin-pack binary not found at {pack}")

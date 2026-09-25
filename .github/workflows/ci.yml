@@ -40,8 +40,8 @@ jobs:
   # coverage — INFORMATIONAL ONLY, never a gate. Additive to the `ci` job above; the `ci` job stays
   # the sole correctness signal and this repo has no umbrella job, so `coverage` is not a required
   # context and nothing `needs:` it. It mirrors plugin-ci's build layout (this plugin's Cargo.toml
-  # depends on a SIBLING `../busbarAI` checkout of the monorepo, so the plugin is checked out to
-  # `plugin/` and busbar to `busbarAI/`), then instruments the plugin workspace with cargo-llvm-cov
+  # depends on a SIBLING `../busbar` checkout of the monorepo, so the plugin is checked out to
+  # `plugin/` and busbar to `busbar/`), then instruments the plugin workspace with cargo-llvm-cov
   # and uploads lcov to Codecov tokenlessly. `service: none` for this hook, so no service containers.
   #
   # The `if:` copies core's coverage-tier convention: skip on a plain feature-branch push, run on
@@ -57,7 +57,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           path: plugin
-      # Sibling busbar checkout the plugin's `../busbarAI/...` path dependencies resolve against.
+      # Sibling busbar checkout the plugin's `../busbar/...` path dependencies resolve against.
       # Same-branch intent as the `ci` job: base_ref FIRST so a pull_request's '<number>/merge'
       # ref never leaks into the checkout.
       - name: Checkout busbar (sibling path dependency)
@@ -65,7 +65,7 @@ jobs:
         with:
           repository: GetBusbar/busbar
           ref: ${{ github.base_ref || github.ref_name }}
-          path: busbarAI
+          path: busbar
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -77,7 +77,7 @@ jobs:
           # action would otherwise find no Cargo.toml and silently cache nothing. See plugin-ci.yml.
           workspaces: |
             plugin
-            busbarAI
+            busbar
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
       - name: Collect coverage (workspace)

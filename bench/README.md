@@ -15,7 +15,7 @@ python3 docker_ab.py --requests 1000 --concurrency 1 --history-kb 11
 
 Needs Docker, Python 3 (stdlib only), and a Rust toolchain (`cargo`). It builds the
 Headroom cdylib from this checkout, packs it as an unsigned dev-mode tarball with
-`busbar-plugin-pack` (built from the busbarAI checkout — see `BUSBARAI_DIR` in
+`busbar-plugin-pack` (built from the busbar checkout — see `BUSBAR_DIR` in
 [`docker_ab.py`](docker_ab.py) if yours isn't laid out at the interim path
 `headroom-hook/Cargo.toml` currently points at), pulls `getbusbar/busbar` if absent,
 then runs a baseline phase (busbar alone, `config.baseline.yaml`) and a hook phase
@@ -44,7 +44,7 @@ without Docker.
   hook accounted for it internally. busbar shares the mock's network namespace so the
   mock is reachable on `127.0.0.1` (busbar's plaintext-loopback carve-out). The
   Headroom plugin loads IN-PROCESS inside the one busbar container (dlopen, the signed
-  `kind: hook` plugin ABI — see `../docs` in busbarAI: `docs/plugins.md`,
+  `kind: hook` plugin ABI — see `../docs` in busbar: `docs/plugins.md`,
   `docs/hooks.md`): the ONLY difference between the baseline and hook phases is which
   `config.yaml` is mounted and whether the `plugins/` directory (containing the packed
   tarball) is bind-mounted at `/etc/busbar/plugins`. There is no second container and

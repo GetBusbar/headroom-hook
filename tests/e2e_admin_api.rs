@@ -13,7 +13,7 @@
 //!   1. Pack the built `headroom-hook` cdylib into a real tarball with the real `busbar-plugin-pack`
 //!      tool (dev-only, unsigned locally — same fallback CI's own release jobs use without a
 //!      `BUSBAR_SIGN_KEY`).
-//!   2. Boot a REAL `busbar` binary (subprocess — `crates/busbar` in the sibling `busbarAI` checkout
+//!   2. Boot a REAL `busbar` binary (subprocess — `crates/busbar` in the sibling `busbar` checkout
 //!      is bin-only, no library crate, so an in-process test harness isn't available from outside
 //!      that crate) with the admin listener up and no hook plugin loaded yet.
 //!   3. POST the base64 tarball to `POST /api/v1/admin/plugins` — the real runtime-install path
@@ -41,7 +41,7 @@
 //!
 //! Mirrors the pattern the sibling `store-valkey` plugin's own
 //! `admin_api_installs_the_valkey_plugin_and_writes_land_in_real_valkey` test established for a
-//! `store` plugin (build the real binaries from the sibling `busbarAI` checkout, pack + install
+//! `store` plugin (build the real binaries from the sibling `busbar` checkout, pack + install
 //! over the real admin API, restart to apply, independently verify the real effect) — adapted here
 //! for a `hook` plugin, where the "real effect" is an observed request mutation instead of a
 //! persisted row.
@@ -91,13 +91,13 @@ fn plugin_path() -> Option<PathBuf> {
     candidate
 }
 
-/// The sibling `busbarAI` checkout's root — the same path convention this crate's own `Cargo.toml`
+/// The sibling `busbar` checkout's root — the same path convention this crate's own `Cargo.toml`
 /// path dependencies already require to exist.
-fn busbarai_root() -> PathBuf {
+fn busbar_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../busbarAI")
+        .join("../busbar")
         .canonicalize()
-        .expect("sibling busbarAI checkout must exist (see Cargo.toml path deps)")
+        .expect("sibling busbar checkout must exist (see Cargo.toml path deps)")
 }
 
 /// Under `CI` a missing prerequisite is a HARD FAILURE, never a silent skip (mirrors the sibling
@@ -112,30 +112,44 @@ fn require_or_skip(ok: bool, what: &str) -> bool {
             "{what} is unavailable under CI: refusing to silently skip the real admin-API e2e test"
         );
     }
-    eprintln!("skip: {what} unavailable (run under CI or build the sibling busbarAI checkout)");
+    eprintln!("skip: {what} unavailable (run under CI or build the sibling busbar checkout)");
     false
 }
 
 /// Build (once; cached by cargo across runs) the real `busbar` and `busbar-plugin-pack` binaries
-/// from the sibling `busbarAI` checkout — never a fixture, never a stub.
+/// from the sibling `busbar` checkout — never a fixture, never a stub.
 fn build_real_binaries() -> (PathBuf, PathBuf) {
-    let root = busbarai_root();
-    let status = Command::new("cargo")
-        .args([
+    let root = busbar_root();
+    // Two invocations, exactly as plugin-ci.yml builds them: in busbar 1.6.0 `busbar-plugin-pack` is
+    // a feature-gated bin of the `busbar-plugin-sdk` package (`--features pack`), not a package of
+    // its own, and building it separately keeps the `pack` feature out of the `busbar` build.
+    for args in [
+        &["build", "--release", "-p", "busbar", "--bin", "busbar"][..],
+        &[
             "build",
             "--release",
             "-p",
-            "busbar",
-            "-p",
+            "busbar-plugin-sdk",
+            "--features",
+            "pack",
+            "--bin",
             "busbar-plugin-pack",
-        ])
-        .current_dir(&root)
-        .status()
-        .expect("run cargo build for busbar + busbar-plugin-pack");
-    assert!(
-        status.success(),
-        "building the real busbar + busbar-plugin-pack binaries must succeed"
-    );
+        ][..],
+    ] {
+        let status = Command::new("cargo")
+            .args(args)
+            .current_dir(&root)
+            // The binaries are read back from `<sibling>/target/release` below, so the build must
+            // land there: an inherited CARGO_TARGET_DIR (set for the outer `cargo test`) would
+            // redirect it into the plugin's own target dir, which the outer cargo still holds locked.
+            .env_remove("CARGO_TARGET_DIR")
+            .status()
+            .expect("run cargo build for busbar / busbar-plugin-pack");
+        assert!(
+            status.success(),
+            "building the real busbar + busbar-plugin-pack binaries must succeed ({args:?})"
+        );
+    }
     (
         root.join("target/release/busbar"),
         root.join("target/release/busbar-plugin-pack"),
@@ -248,7 +262,7 @@ fn admin_api_installs_headroom_and_a_real_request_is_compressed_upstream() {
         }
         unreachable!();
     };
-    if !require_or_skip(busbarai_root().is_dir(), "the sibling busbarAI checkout") {
+    if !require_or_skip(busbar_root().is_dir(), "the sibling busbar checkout") {
         return;
     }
 

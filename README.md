@@ -108,7 +108,7 @@ replace the default entirely; copy the `plugins:`/`hooks:`/`pools.*.hooks` block
 the baked-in default into yours to keep Headroom wired. Published by
 [`.github/workflows/docker-bundle.yml`](.github/workflows/docker-bundle.yml).
 
-This image is distinct from `getbusbar/busbar` (busbarAI's own plugin-free image) and
+This image is distinct from `getbusbar/busbar` (busbar's own plugin-free image) and
 supersedes the old `getbusbar/headroom-hook` standalone image described later in this
 repo's history (that image predates busbar's dlopen plugin ABI and is no longer
 buildable — see the root `Dockerfile`'s header).

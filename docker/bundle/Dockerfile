@@ -5,21 +5,21 @@
 # provider key, and compression is already wired in — no separate plugin install step.
 #
 # It is DISTINCT from:
-#   - getbusbar/busbar (busbarAI's own image): plugin-free, same treatment every plugin gets.
+#   - getbusbar/busbar (busbar's own image): plugin-free, same treatment every plugin gets.
 #     If you want a DIFFERENT plugin (or a custom set), start there and drop in tarballs
-#     yourself (docs/plugins.md in busbarAI).
+#     yourself (docs/plugins.md in busbar).
 #   - getbusbar/headroom-hook (this repo's OWN image, see the root Dockerfile): that image
 #     predates busbar's dlopen plugin ABI and describes a retired Unix-socket transport this
 #     repo no longer builds a binary for — see that Dockerfile's header for the deprecation
 #     note. This bundle supersedes it as the "just run Headroom" path.
 #
 # FROM scratch, because the binary is the whole product. The busbar binary is built from a sibling
-# ../busbarAI checkout (source of truth for busbar itself, see
-# .github/workflows/docker-bundle.yml) with the SAME PGO-mandatory release build busbarAI's own
+# ../busbar checkout (source of truth for busbar itself, see
+# .github/workflows/docker-bundle.yml) with the SAME PGO-mandatory release build busbar's own
 # release/docker pipelines use, so this image's busbar binary is equivalently optimized, not a
 # naive debug build. CA roots are compiled into the binary (webpki-roots), so no /etc/ssl needed.
 #
-# busbar here is DYNAMICALLY linked against musl, NOT static-pie like busbarAI's own image, and
+# busbar here is DYNAMICALLY linked against musl, NOT static-pie like busbar's own image, and
 # that difference is load-bearing rather than incidental. A fully static musl binary has no
 # dynamic loader in it at all, so dlopen() is a stub that always fails: every version of this
 # bundle built before this change died at boot with
@@ -30,7 +30,7 @@
 #           plugin 'busbar-headroom': Dynamic loading not supported
 #
 # which made THIS IMAGE'S ENTIRE REASON FOR EXISTING non-functional: the whole point of the
-# bundle is that the plugin is pre-loaded. busbarAI's own getbusbar/busbar image can stay static
+# bundle is that the plugin is pre-loaded. busbar's own getbusbar/busbar image can stay static
 # because it ships plugin-free; a bundle cannot. So busbar is built with crt-static disabled in
 # the same musl-native rust:alpine container as the cdylib, and the musl DYNAMIC LOADER
 # (/lib/ld-musl-<arch>.so.1, which is the busbar binary's PT_INTERP) is carried in alongside the
@@ -55,7 +55,7 @@
 # usual self-contained static-pie one. Bundling its exact runtime libs (built in the same
 # musl-native container, so the ABI matches) is what makes dlopen() succeed in a FROM-scratch
 # image that otherwise has no libc at all. The mechanism — the musl-native rust:alpine build
-# container, crt-static disabled, runtime-lib extraction — is the same one busbarAI's own image
+# container, crt-static disabled, runtime-lib extraction — is the same one busbar's own image
 # build uses for this cdylib.
 #
 # Run (zero-config quickstart — headroom active, one provider):

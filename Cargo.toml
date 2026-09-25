@@ -20,8 +20,8 @@ crate-type = ["cdylib", "rlib"]
 headroom-core = { git = "https://github.com/headroomlabs-ai/headroom", tag = "v0.38.0", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# INTERIM: busbarAI isn't public yet, so this is a local path dependency into a sibling checkout of
-# the monorepo. Once busbarAI ships publicly this should become a git (pinned rev/tag) or crates.io
+# INTERIM: busbar isn't public yet, so this is a local path dependency into a sibling checkout of
+# the monorepo. Once busbar ships publicly this should become a git (pinned rev/tag) or crates.io
 # dependency instead — same relative-path convention webrequest-hook's busbar-plugin-sdk dependency
 # already uses.
 busbar-plugin-sdk = { path = "../busbar/crates/plugin-sdk" }
@@ -33,7 +33,7 @@ busbar-api = { path = "../busbar/crates/api" }
 # Dev-only: the real-admin-API e2e test builds+drives an actual `busbar` process over HTTP (install
 # a signed plugin tarball via POST /api/v1/admin/plugins, mint a key, drive a real chat completion)
 # — a blocking client keeps that test synchronous, no tokio runtime needed. Same major version
-# busbarAI's own `busbar` crate pins, rustls-tls only, mirroring its trimmed feature set.
+# busbar's own `busbar` crate pins, rustls-tls only, mirroring its trimmed feature set.
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 # Dev-only: base64-encodes the packed tarball into POST /api/v1/admin/plugins's JSON body.
 base64 = "0.22"
