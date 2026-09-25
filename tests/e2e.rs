@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! End-to-end coverage of the `headroom-hook` compression gate loaded over the REAL
-//! `busbar-plugin-loader` `open_hook` seam (`load_hook_from_bytes`) — the exact seam busbarAI's
+//! `busbar-plugin-loader` `open_hook` seam (`load_hook_from_bytes`) — the exact seam busbar's
 //! engine sees: an `Arc<dyn RoutingPolicy>` indistinguishable from a compiled-in policy, whose
 //! `transform` compresses the granted prompt with the REAL `headroom-core` BM25 `TextCrusher`
 //! engine, and whose reply is parsed through the engine's own fail-closed `hooks::wire`
@@ -105,13 +105,13 @@ fn projectors() -> Arc<HookProjectors> {
         }),
         normalize: Box::new(|v, cands| {
             let Some(order) = v.get("order").and_then(|o| o.as_array()) else {
-                return RoutingDecision::Abstain;
+                return Ok(RoutingDecision::Abstain);
             };
             let valid: std::collections::HashSet<usize> = cands.iter().map(|c| c.idx).collect();
-            RoutingDecision::from_ranked(
+            Ok(RoutingDecision::from_ranked(
                 order.iter().filter_map(|x| x.as_u64().map(|x| x as usize)),
                 &valid,
-            )
+            ))
         }),
         transform_outcome: Box::new(|v| {
             match v
